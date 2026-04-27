@@ -1,0 +1,62 @@
+version: "3.9"
+
+networks:
+  cortex-net:
+    driver: bridge
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama_data:/root/.ollama
+    networks:
+      - cortex-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./chroma_data:/chroma/chroma
+    networks:
+      - cortex-net
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+    networks:
+      - cortex-net
+
+  cortex-api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - CORTEX_OLLAMA_BASE_URL=http://ollama:11434
+      - CORTEX_CHROMA_PATH=/app/.cortex/chroma
+      - CORTEX_DB_PATH=/app/.cortex/cortex.db
+      - CORTEX_OTEL_ENDPOINT=http://jaeger:4317
+    depends_on:
+      - ollama
+      - chromadb
+      - jaeger
+    networks:
+      - cortex-net
+    volumes:
+      - cortex_data:/app/.cortex
+
+volumes:
+  cortex_data:
