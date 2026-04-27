@@ -1,0 +1,19 @@
+version: "3.9"
+
+services:
+  cortex-api:
+    volumes:
+      - ../src:/app/src
+    environment:
+      - CORTEX_LOG_LEVEL=DEBUG
+    command:
+      [
+        "uvicorn",
+        "cortex.api.server:create_app",
+        "--factory",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--reload",
+      ]
