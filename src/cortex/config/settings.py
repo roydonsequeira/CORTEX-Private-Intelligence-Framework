@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     otel_endpoint: str = "http://localhost:4317"
     max_agent_steps: int = 20
     plugins_dir: Path = Path("./src/cortex/tools/plugins")
+    allowed_root: Path = Path(".")
+    allowed_write_extensions: list[str] = [".txt", ".md", ".json", ".csv", ".py"]
+    tool_timeout_seconds: float = 30.0
+    code_exec_timeout_seconds: float = 10.0
 
     model_config = {"env_prefix": "CORTEX_", "case_sensitive": False}
 
