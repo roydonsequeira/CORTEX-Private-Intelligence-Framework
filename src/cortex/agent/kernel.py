@@ -2,7 +2,7 @@
 
 import asyncio
 import uuid
-from typing import Literal
+from typing import Any, Literal
 
 import structlog
 from pydantic import BaseModel, Field
@@ -12,9 +12,10 @@ from cortex.agent.planner import Planner
 from cortex.agent.reflector import Reflector
 from cortex.config.settings import Settings
 from cortex.memory.manager import MemoryManager
-from cortex.models.provider import Message, ToolResult
+from cortex.models.provider import Message
 from cortex.models.router import ModelRouter
 from cortex.observability.tracing import get_tracer
+from cortex.tools.base import ToolResult
 from cortex.tools.registry import ToolRegistry
 
 logger = structlog.get_logger(__name__)
@@ -58,7 +59,7 @@ class AgentKernel:
         self,
         user_input: str,
         session_id: str | None = None,
-        event_queue: asyncio.Queue | None = None,
+        event_queue: asyncio.Queue[dict[str, Any]] | None = None,
     ) -> AgentState:
         """Execute the agent loop for user_input and return the final AgentState."""
         sid = session_id or uuid.uuid4().hex
@@ -116,7 +117,10 @@ class AgentKernel:
                         },
                     )
 
-                await self._memory_manager.store_turn(sid, "assistant", state.messages[-1].content)
+                last_message = state.messages[-1]
+                await self._memory_manager.store_turn(
+                    sid, last_message.role, last_message.content
+                )
 
                 if state.status not in ("complete", "failed"):
                     state.status = "reflecting"
@@ -148,7 +152,9 @@ class AgentKernel:
         return state
 
     @staticmethod
-    async def _emit(queue: asyncio.Queue | None, event: dict) -> None:
+    async def _emit(
+        queue: asyncio.Queue[dict[str, Any]] | None, event: dict[str, Any]
+    ) -> None:
         """Push an event onto the queue if one is provided."""
         if queue is not None:
             await queue.put(event)
