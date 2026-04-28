@@ -1,5 +1,7 @@
 """FastAPI application factory stub — full implementation in Phase 4."""
 
+from typing import Any
+
 from fastapi import FastAPI
 
 
@@ -12,7 +14,7 @@ def create_app() -> FastAPI:
     )
 
     @app.get("/health")
-    async def health() -> dict:
+    async def health() -> dict[str, Any]:
         return {"status": "ok", "phase": "0-1-stub"}
 
     return app
