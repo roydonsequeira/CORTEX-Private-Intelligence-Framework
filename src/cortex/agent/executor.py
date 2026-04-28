@@ -2,16 +2,16 @@
 
 import asyncio
 import json
-import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from cortex.exceptions import CortexToolError
-from cortex.models.provider import GenerationConfig, Message, ToolCall
+from cortex.models.provider import GenerationConfig, Message
 from cortex.models.router import ModelCapability, ModelRouter
 from cortex.observability.metrics import increment_agent_steps
 from cortex.observability.tracing import get_tracer
+from cortex.tools.base import ToolResult
 from cortex.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
@@ -42,7 +42,6 @@ class Executor:
 
         Returns the mutated state with updated messages, tool_results, and status.
         """
-        from cortex.agent.kernel import AgentState
 
         with _tracer.start_as_current_span("executor.step") as span:
             span.set_attribute("session_id", state.session_id)
@@ -89,19 +88,20 @@ class Executor:
 
     async def _handle_tool_calls(
         self,
-        raw_tool_calls: list[dict],
+        raw_tool_calls: list[dict[str, Any]],
         state: "AgentState",
         tool_registry: ToolRegistry,
         router: ModelRouter,
     ) -> "AgentState":
         """Execute each tool call with retry, appending results to state."""
-        from cortex.agent.kernel import AgentState
 
         for tc in raw_tool_calls:
             fn = tc.get("function", tc)
             tool_name: str = fn.get("name", "")
             raw_args = fn.get("arguments", {})
-            kwargs: dict = raw_args if isinstance(raw_args, dict) else json.loads(raw_args)
+            kwargs: dict[str, object] = (
+                raw_args if isinstance(raw_args, dict) else json.loads(raw_args)
+            )
 
             result = await self._execute_with_retry(tool_name, tool_registry, **kwargs)
             state.tool_results.append(result)
@@ -120,11 +120,15 @@ class Executor:
         tool_name: str,
         tool_registry: ToolRegistry,
         **kwargs: object,
-    ):
+    ) -> ToolResult:
         """Execute a tool with exponential backoff on failure (max 3 retries)."""
-        from cortex.tools.base import ToolResult
-
-        last_result = None
+        last_result = ToolResult(
+            tool_name=tool_name,
+            success=False,
+            output="",
+            error="Tool execution did not run.",
+            execution_time_ms=0.0,
+        )
         for attempt in range(_MAX_RETRIES):
             try:
                 result = await tool_registry.execute(tool_name, **kwargs)
