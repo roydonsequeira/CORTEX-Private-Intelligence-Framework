@@ -1,7 +1,7 @@
 """Base abstractions for the CORTEX tool system."""
 
 from abc import ABC, abstractmethod
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from pydantic import BaseModel
 
@@ -11,7 +11,7 @@ class ToolSchema(BaseModel):
 
     name: str
     description: str
-    parameters: dict
+    parameters: dict[str, Any]
 
 
 class ToolResult(BaseModel):
@@ -34,7 +34,7 @@ class BaseTool(ABC):
         """Execute the tool with the provided arguments."""
         ...
 
-    def to_ollama_format(self) -> dict:
+    def to_ollama_format(self) -> dict[str, Any]:
         """Convert this tool's schema to the Ollama tool-call dict format."""
         return {
             "type": "function",
