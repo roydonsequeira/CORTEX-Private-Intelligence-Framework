@@ -1,7 +1,7 @@
 """Ollama model provider — async HTTP client wrapping the Ollama REST API."""
 
 import time
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 import structlog
@@ -19,7 +19,7 @@ class ToolCall(BaseModel):
     """A single tool invocation requested by the model."""
 
     name: str
-    arguments: dict
+    arguments: dict[str, Any]
 
 
 class ToolResult(BaseModel):
@@ -58,7 +58,7 @@ class ModelResponse(BaseModel):
     input_tokens: int
     output_tokens: int
     latency_ms: float
-    raw: dict
+    raw: dict[str, Any]
 
 
 class OllamaProvider:
@@ -73,11 +73,11 @@ class OllamaProvider:
         model: str,
         messages: list[Message],
         config: GenerationConfig | None = None,
-        tools: list[dict] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> ModelResponse:
         """Call the Ollama /api/chat endpoint and return a normalised ModelResponse."""
         cfg = config or GenerationConfig()
-        payload: dict = {
+        payload: dict[str, Any] = {
             "model": model,
             "messages": [m.model_dump(exclude_none=True) for m in messages],
             "stream": False,
