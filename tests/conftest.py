@@ -1,13 +1,15 @@
 """Shared pytest fixtures for the CORTEX test suite."""
 
-import os
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
 
 
 @pytest.fixture(autouse=True)
-def _isolate_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _isolate_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Generator[None, None, None]:
     """Point CORTEX data paths to a temp dir and clear the settings cache."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CORTEX_CHROMA_PATH", str(tmp_path / "chroma"))
