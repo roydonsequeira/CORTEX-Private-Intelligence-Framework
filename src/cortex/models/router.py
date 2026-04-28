@@ -1,12 +1,13 @@
 """Model router — selects the right Ollama model for a given capability."""
 
-from enum import Enum
+from enum import StrEnum
+from typing import Any
 
 from cortex.config.settings import Settings
 from cortex.models.provider import GenerationConfig, Message, ModelResponse, OllamaProvider
 
 
-class ModelCapability(str, Enum):
+class ModelCapability(StrEnum):
     """High-level capability buckets used to route requests to the right model."""
 
     REASONING = "REASONING"
@@ -49,7 +50,7 @@ class ModelRouter:
         capability: ModelCapability,
         messages: list[Message],
         config: GenerationConfig | None = None,
-        tools: list[dict] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> ModelResponse:
         """Delegate a completion call to the provider using the routed model."""
         model = self.route(capability)
