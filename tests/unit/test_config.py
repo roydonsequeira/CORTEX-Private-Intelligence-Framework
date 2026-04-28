@@ -1,6 +1,5 @@
 """Tests for the CORTEX config module."""
 
-import os
 from pathlib import Path
 
 import pytest
