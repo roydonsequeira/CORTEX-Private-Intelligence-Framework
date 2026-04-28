@@ -1,20 +1,21 @@
 """Unit tests for AgentKernel — router, tool_registry, and memory are mocked."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from cortex.agent.kernel import AgentKernel, AgentState
+from cortex.agent.kernel import AgentKernel
 from cortex.config.settings import Settings
 from cortex.memory.manager import MemoryManager
-from cortex.models.provider import Message, ModelResponse
-from cortex.models.router import ModelCapability, ModelRouter
+from cortex.models.provider import ModelResponse
+from cortex.models.router import ModelRouter
 from cortex.tools.base import ToolResult
 from cortex.tools.registry import ToolRegistry
 
 
 def _mock_model_response(content: str) -> ModelResponse:
-    raw: dict = {
+    raw: dict[str, Any] = {
         "model": "llama3.1:8b",
         "message": {"role": "assistant", "content": content},
         "prompt_eval_count": 5,
@@ -32,7 +33,7 @@ def _mock_model_response(content: str) -> ModelResponse:
 
 def _mock_tool_call_response(tool_name: str = "dummy") -> ModelResponse:
     """Simulate an executor step that calls a tool (keeps loop alive)."""
-    raw: dict = {
+    raw: dict[str, Any] = {
         "model": "llama3.1:8b",
         "message": {
             "role": "assistant",
