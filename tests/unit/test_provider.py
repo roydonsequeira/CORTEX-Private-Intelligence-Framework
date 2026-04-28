@@ -1,15 +1,16 @@
 """Unit tests for OllamaProvider — all network calls are mocked."""
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
 from cortex.exceptions import CortexModelError
-from cortex.models.provider import GenerationConfig, Message, ModelResponse, OllamaProvider
+from cortex.models.provider import Message, ModelResponse, OllamaProvider
 
 
-def _make_chat_response(content: str, model: str = "llama3.1:8b") -> dict:
+def _make_chat_response(content: str, model: str = "llama3.1:8b") -> dict[str, Any]:
     return {
         "model": model,
         "message": {"role": "assistant", "content": content},
@@ -54,12 +55,11 @@ async def test_complete_raises_cortex_model_error_on_http_failure(
         provider._client,
         "post",
         new=AsyncMock(side_effect=httpx.ConnectError("connection refused")),
-    ):
-        with pytest.raises(CortexModelError):
-            await provider.complete(
-                model="llama3.1:8b",
-                messages=[Message(role="user", content="Hi")],
-            )
+    ), pytest.raises(CortexModelError):
+        await provider.complete(
+            model="llama3.1:8b",
+            messages=[Message(role="user", content="Hi")],
+        )
 
 
 @pytest.mark.asyncio
