@@ -33,6 +33,7 @@ infra/chroma_data/
 # Node / Next.js
 ui/node_modules/
 ui/.next/
+ui/tsconfig.tsbuildinfo
 ui/out/
 ui/.env.local
 
