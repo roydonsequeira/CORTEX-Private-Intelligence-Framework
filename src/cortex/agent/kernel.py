@@ -104,18 +104,9 @@ class AgentKernel:
                     },
                 )
 
-                state = await self._executor.step(state, self._tool_registry, self._router)
-
-                if state.tool_results:
-                    last = state.tool_results[-1]
-                    await self._emit(
-                        event_queue,
-                        {
-                            "type": "tool_result",
-                            "success": last.success,
-                            "output": last.output[:512],
-                        },
-                    )
+                state = await self._executor.step(
+                    state, self._tool_registry, self._router, event_queue
+                )
 
                 last_message = state.messages[-1]
                 await self._memory_manager.store_turn(
@@ -133,10 +124,8 @@ class AgentKernel:
                 state.final_answer = state.final_answer or "Maximum steps reached without answer."
 
             if state.final_answer:
-                await self._emit(
-                    event_queue,
-                    {"type": "token", "value": state.final_answer},
-                )
+                for chunk in _chunk_text(state.final_answer):
+                    await self._emit(event_queue, {"type": "token", "value": chunk})
 
             await self._emit(
                 event_queue, {"type": "done", "steps_taken": state.steps_taken}
@@ -158,3 +147,10 @@ class AgentKernel:
         """Push an event onto the queue if one is provided."""
         if queue is not None:
             await queue.put(event)
+
+
+def _chunk_text(text: str, chunk_size: int = 80) -> list[str]:
+    """Chunk final answers into token-like SSE payloads until true LLM streaming lands."""
+    if not text:
+        return []
+    return [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
