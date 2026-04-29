@@ -58,5 +58,19 @@ services:
     volumes:
       - cortex_data:/app/.cortex
 
+  ui:
+    build:
+      context: ../ui
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_CORTEX_API_URL=http://localhost:8000
+      - CORTEX_API_URL=http://cortex-api:8000
+    depends_on:
+      - cortex-api
+    networks:
+      - cortex-net
+
 volumes:
   cortex_data:
