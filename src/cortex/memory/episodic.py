@@ -124,6 +124,29 @@ class EpisodicMemory(BaseMemory):
             ).fetchall()
         return [Message(role=row[0], content=row[1]) for row in rows]
 
+    async def list_session_ids(self) -> list[str]:
+        """Return all known session IDs ordered by most recent activity."""
+        await self.initialize()
+        async with aiosqlite.connect(self._db_path) as db:
+            rows = await (
+                await db.execute(
+                    """
+                    SELECT session_id, MAX(created_at) AS last_seen
+                    FROM episodes
+                    GROUP BY session_id
+                    ORDER BY last_seen DESC
+                    """
+                )
+            ).fetchall()
+        return [str(row[0]) for row in rows]
+
+    async def delete_session(self, session_id: str) -> None:
+        """Delete all episodic memory for a session."""
+        await self.initialize()
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute("DELETE FROM episodes WHERE session_id = ?", (session_id,))
+            await db.commit()
+
     async def prune_old_sessions(self, days: int = 30) -> None:
         """Delete episodes older than the provided age in days."""
         cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
