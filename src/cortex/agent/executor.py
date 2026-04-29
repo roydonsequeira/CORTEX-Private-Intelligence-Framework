@@ -37,6 +37,7 @@ class Executor:
         state: "AgentState",
         tool_registry: ToolRegistry,
         router: ModelRouter,
+        event_queue: asyncio.Queue[dict[str, Any]] | None = None,
     ) -> "AgentState":
         """Advance the agent state by one ReAct step.
 
@@ -75,7 +76,7 @@ class Executor:
             raw_tool_calls = response.raw.get("message", {}).get("tool_calls")
             if raw_tool_calls:
                 state = await self._handle_tool_calls(
-                    raw_tool_calls, state, tool_registry, router
+                    raw_tool_calls, state, tool_registry, router, event_queue
                 )
             else:
                 state.messages.append(
@@ -92,6 +93,7 @@ class Executor:
         state: "AgentState",
         tool_registry: ToolRegistry,
         router: ModelRouter,
+        event_queue: asyncio.Queue[dict[str, Any]] | None = None,
     ) -> "AgentState":
         """Execute each tool call with retry, appending results to state."""
 
@@ -103,8 +105,22 @@ class Executor:
                 raw_args if isinstance(raw_args, dict) else json.loads(raw_args)
             )
 
+            await self._emit(
+                event_queue,
+                {"type": "tool_call", "tool": tool_name, "args": kwargs},
+            )
             result = await self._execute_with_retry(tool_name, tool_registry, **kwargs)
             state.tool_results.append(result)
+            await self._emit(
+                event_queue,
+                {
+                    "type": "tool_result",
+                    "tool": tool_name,
+                    "success": result.success,
+                    "output": result.output[:512],
+                    "error": result.error,
+                },
+            )
             state.messages.append(
                 Message(
                     role="tool",
@@ -154,3 +170,11 @@ class Executor:
                 await asyncio.sleep(_RETRY_BASE_DELAY * (2**attempt))
 
         return last_result
+
+    @staticmethod
+    async def _emit(
+        queue: asyncio.Queue[dict[str, Any]] | None, event: dict[str, Any]
+    ) -> None:
+        """Push executor events onto the queue if one is provided."""
+        if queue is not None:
+            await queue.put(event)
