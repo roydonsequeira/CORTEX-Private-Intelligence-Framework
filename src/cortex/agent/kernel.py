@@ -8,6 +8,7 @@ import structlog
 from pydantic import BaseModel, Field
 
 from cortex.agent.executor import Executor
+from cortex.agent.loop import LATSLoop
 from cortex.agent.planner import Planner
 from cortex.agent.reflector import Reflector
 from cortex.config.settings import Settings
@@ -60,9 +61,15 @@ class AgentKernel:
         user_input: str,
         session_id: str | None = None,
         event_queue: asyncio.Queue[dict[str, Any]] | None = None,
+        use_lats: bool | None = None,
+        _allow_lats: bool = True,
     ) -> AgentState:
         """Execute the agent loop for user_input and return the final AgentState."""
         sid = session_id or uuid.uuid4().hex
+        should_use_lats = _allow_lats and (use_lats is True or self._settings.use_lats)
+        if should_use_lats:
+            return await self._run_lats(user_input, sid, event_queue)
+
         state = AgentState(session_id=sid, user_input=user_input)
 
         with _tracer.start_as_current_span("kernel.run") as span:
@@ -116,6 +123,8 @@ class AgentKernel:
                 if state.status not in ("complete", "failed"):
                     state.status = "reflecting"
                     state = await reflector.evaluate(state)
+                    if state.status == "failed" and _allow_lats:
+                        return await self._run_lats(user_input, sid, event_queue)
                     if state.status == "reflecting":
                         state.status = "executing"
 
@@ -138,6 +147,32 @@ class AgentKernel:
             steps=state.steps_taken,
             status=state.status,
         )
+        return state
+
+    async def _run_lats(
+        self,
+        user_input: str,
+        session_id: str,
+        event_queue: asyncio.Queue[dict[str, Any]] | None = None,
+    ) -> AgentState:
+        """Run the LATS loop and emit compatible SSE events."""
+        await self._emit(event_queue, {"type": "session_id", "value": session_id})
+        await self._emit(
+            event_queue,
+            {"type": "plan", "steps": ["Run Language Agent Tree Search"]},
+        )
+        loop = LATSLoop(
+            self,
+            self._router,
+            max_depth=self._settings.lats.max_depth,
+            n_branches=self._settings.lats.n_branches,
+            simulation_budget=self._settings.lats.budget,
+        )
+        state = await loop.run(user_input, session_id)
+        if state.final_answer:
+            for chunk in _chunk_text(state.final_answer):
+                await self._emit(event_queue, {"type": "token", "value": chunk})
+        await self._emit(event_queue, {"type": "done", "steps_taken": state.steps_taken})
         return state
 
     @staticmethod
