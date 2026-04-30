@@ -4,6 +4,7 @@ import asyncio
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from typing import Any, cast
 
 import structlog
 from fastapi import FastAPI
@@ -11,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from cortex.agent.kernel import AgentKernel
+from cortex.agent.supervisor import SupervisorAgent
 from cortex.api.middleware.telemetry import telemetry_middleware
 from cortex.api.routes import chat, health, memory, tasks, tools
 from cortex.config import get_settings
@@ -84,6 +86,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     register_builtin_tools(tool_registry, settings, semantic)
     tool_registry.auto_discover(settings.plugins_dir)
     kernel = AgentKernel(router, tool_registry, memory_manager, settings)
+    supervisor = SupervisorAgent(
+        lambda: AgentKernel(router, tool_registry, memory_manager, settings),
+        router,
+        max_workers=settings.supervisor.max_workers,
+    )
 
     app.state.settings = settings
     app.state.ollama_provider = provider
@@ -94,6 +101,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.procedural_memory = procedural
     app.state.tool_registry = tool_registry
     app.state.agent_kernel = kernel
+    app.state.supervisor_agent = supervisor
     app.state.started_at = time.monotonic()
     app.state.task_queue = asyncio.Queue()
     app.state.task_results = {}
@@ -115,12 +123,8 @@ async def _task_worker(app: FastAPI) -> None:
         task_id = item["task_id"]
         app.state.task_results[task_id] = {"task_id": task_id, "status": "running"}
         try:
-            state = await app.state.agent_kernel.run(item["task"])
-            app.state.task_results[task_id] = {
-                "task_id": task_id,
-                "status": "done",
-                "result": state.model_dump(mode="json"),
-            }
+            result = await _run_orchestrated_task(app, item)
+            app.state.task_results[task_id] = {"task_id": task_id, "status": "done", "result": result}
         except Exception as exc:
             app.state.task_results[task_id] = {
                 "task_id": task_id,
@@ -129,3 +133,22 @@ async def _task_worker(app: FastAPI) -> None:
             }
         finally:
             app.state.task_queue.task_done()
+
+
+async def _run_orchestrated_task(app: FastAPI, item: dict[str, str]) -> dict[str, Any]:
+    """Dispatch a queued task to single-agent, LATS, or supervisor orchestration."""
+    orchestration = item.get("orchestration", "single")
+    if orchestration == "supervisor":
+        result = await app.state.supervisor_agent.run(item["task"], task_session_id(item["task_id"]))
+        return cast(dict[str, Any], result.model_dump(mode="json"))
+    state = await app.state.agent_kernel.run(
+        item["task"],
+        session_id=task_session_id(item["task_id"]),
+        use_lats=orchestration == "lats",
+    )
+    return cast(dict[str, Any], state.model_dump(mode="json"))
+
+
+def task_session_id(task_id: str) -> str:
+    """Return a deterministic session id for queued task work."""
+    return f"task-{task_id}"
