@@ -5,7 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from cortex.agent.kernel import AgentKernel
+from cortex.agent.kernel import AgentKernel, AgentState
+from cortex.agent.loop import LATSLoop
 from cortex.config.settings import Settings
 from cortex.memory.manager import MemoryManager
 from cortex.models.provider import ModelResponse
@@ -155,8 +156,8 @@ async def test_run_uses_provided_session_id() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_reflector_halts_on_no_progress() -> None:
-    """Reflector stops the loop after two consecutive non-progress steps."""
+async def test_run_reflector_halts_on_no_progress_when_lats_disabled() -> None:
+    """Reflector stops the loop after two non-progress steps when LATS is disabled."""
     kernel, router, _ = _make_kernel(
         Settings(ollama_base_url="http://fake:11434", max_agent_steps=20)
     )
@@ -169,5 +170,52 @@ async def test_run_reflector_halts_on_no_progress() -> None:
         _mock_model_response('{"progress": false}'),
     ]
 
-    state = await kernel.run("An unresolvable task")
+    state = await kernel.run("An unresolvable task", _allow_lats=False)
     assert state.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_run_reflector_falls_back_to_lats(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reflector failure falls back to LATS before returning failed."""
+    kernel, router, _ = _make_kernel(
+        Settings(ollama_base_url="http://fake:11434", max_agent_steps=20)
+    )
+    router.complete.side_effect = [
+        _mock_model_response('["step one", "step two"]'),
+        _mock_tool_call_response("dummy"),
+        _mock_model_response('{"progress": false}'),
+        _mock_tool_call_response("dummy"),
+        _mock_model_response('{"progress": false}'),
+    ]
+    lats_state = AgentState(
+        session_id="s1",
+        user_input="An unresolvable task",
+        final_answer="lats recovered",
+        status="complete",
+    )
+    run_mock = AsyncMock(return_value=lats_state)
+    monkeypatch.setattr(LATSLoop, "run", run_mock)
+
+    state = await kernel.run("An unresolvable task")
+
+    assert state is lats_state
+    run_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_with_use_lats_routes_to_lats(monkeypatch: pytest.MonkeyPatch) -> None:
+    """use_lats=True routes execution through LATSLoop."""
+    kernel, _, _ = _make_kernel()
+    lats_state = AgentState(
+        session_id="s1",
+        user_input="hard task",
+        final_answer="lats answer",
+        status="complete",
+    )
+    run_mock = AsyncMock(return_value=lats_state)
+    monkeypatch.setattr(LATSLoop, "run", run_mock)
+
+    state = await kernel.run("hard task", session_id="s1", use_lats=True)
+
+    assert state is lats_state
+    run_mock.assert_awaited_once_with("hard task", "s1")
