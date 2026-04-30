@@ -15,6 +15,7 @@ class TaskRequest(BaseModel):
     task: str = Field(min_length=1, max_length=8192)
     priority: Literal["low", "normal", "high"] = "normal"
     callback_url: str | None = None
+    orchestration: Literal["single", "supervisor", "lats"] = "single"
 
 
 @router.post("")
@@ -28,6 +29,7 @@ async def create_task(payload: TaskRequest, request: Request) -> dict[str, str]:
             "task": payload.task,
             "priority": payload.priority,
             "callback_url": payload.callback_url,
+            "orchestration": payload.orchestration,
         }
     )
     return {"task_id": task_id, "status": "queued"}
