@@ -73,6 +73,8 @@ def app() -> FastAPI:
     app.state.semantic_memory = type("Semantic", (), {"_collection": object()})()
     app.state.tool_registry = _FakeToolRegistry()
     app.state.started_at = 1.0
+    app.state.task_queue = asyncio.Queue()
+    app.state.task_results = {}
     return app
 
 
@@ -124,3 +126,18 @@ async def test_sse_stream_yields_expected_event_order(app: FastAPI) -> None:
         _, raw = block.split("data: ", 1)
         events.append(json.loads(raw)["type"])
     assert events == ["session_id", "plan", "step_start", "token", "done"]
+
+
+@pytest.mark.asyncio
+async def test_tasks_accept_orchestration_mode(app: FastAPI) -> None:
+    """POST /tasks stores requested orchestration mode on queued work."""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/tasks",
+            json={"task": "research", "priority": "normal", "orchestration": "supervisor"},
+        )
+
+    assert response.status_code == 200
+    queued = await app.state.task_queue.get()
+    assert queued["orchestration"] == "supervisor"
