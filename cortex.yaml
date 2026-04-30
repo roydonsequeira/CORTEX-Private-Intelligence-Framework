@@ -18,3 +18,10 @@ allowed_write_extensions:
   - .py
 tool_timeout_seconds: 30.0
 code_exec_timeout_seconds: 10.0
+lats:
+  enabled: false
+  max_depth: 5
+  n_branches: 3
+  budget: 10
+supervisor:
+  max_workers: 3
