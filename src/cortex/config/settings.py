@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import field_validator
+from pydantic import BaseModel, field_validator
 from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 
@@ -39,6 +39,21 @@ class _YamlSource(PydanticBaseSettingsSource):
         return result
 
 
+class LATSSettings(BaseModel):
+    """Language Agent Tree Search settings."""
+
+    enabled: bool = False
+    max_depth: int = 5
+    n_branches: int = 3
+    budget: int = 10
+
+
+class SupervisorSettings(BaseModel):
+    """Supervisor-worker orchestration settings."""
+
+    max_workers: int = 3
+
+
 class Settings(BaseSettings):
     """All CORTEX runtime configuration. No magic strings in the codebase."""
 
@@ -57,6 +72,8 @@ class Settings(BaseSettings):
     allowed_write_extensions: list[str] = [".txt", ".md", ".json", ".csv", ".py"]
     tool_timeout_seconds: float = 30.0
     code_exec_timeout_seconds: float = 10.0
+    lats: LATSSettings = LATSSettings()
+    supervisor: SupervisorSettings = SupervisorSettings()
 
     model_config = {"env_prefix": "CORTEX_", "case_sensitive": False}
 
@@ -69,6 +86,11 @@ class Settings(BaseSettings):
         if upper not in valid:
             raise ValueError(f"log_level must be one of {valid}, got: {v!r}")
         return upper
+
+    @property
+    def use_lats(self) -> bool:
+        """Compatibility accessor for Phase 6's settings.use_lats reference."""
+        return self.lats.enabled
 
     @classmethod
     def settings_customise_sources(
