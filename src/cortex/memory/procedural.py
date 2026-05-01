@@ -92,7 +92,9 @@ class ProceduralMemory(BaseMemory):
         """Embed and upsert a procedural memory entry into ChromaDB."""
         await self.initialize()
         assert self._collection is not None
-        with _tracer.start_as_current_span("memory.procedural.store"):
+        with _tracer.start_as_current_span("memory.procedural.store") as span:
+            span.set_attribute("memory.type", entry.memory_type)
+            span.set_attribute("memory.collection", self._collection_name)
             embedding = (await self._provider.embed(self._embed_model, entry.content))[0]
             self._collection.upsert(
                 ids=[entry.id],
@@ -106,7 +108,9 @@ class ProceduralMemory(BaseMemory):
         """Retrieve similar procedural memory entries."""
         await self.initialize()
         assert self._collection is not None
-        with _tracer.start_as_current_span("memory.procedural.retrieve"):
+        with _tracer.start_as_current_span("memory.procedural.retrieve") as span:
+            span.set_attribute("memory.collection", self._collection_name)
+            span.set_attribute("memory.top_k", query.top_k)
             embedding = (await self._provider.embed(self._embed_model, query.text))[0]
             result = self._collection.query(
                 query_embeddings=[embedding],

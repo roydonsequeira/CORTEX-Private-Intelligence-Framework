@@ -49,7 +49,9 @@ class EpisodicMemory(BaseMemory):
         metadata = dict(entry.metadata)
         session_id = str(metadata.get("session_id", "default"))
         role = str(metadata.get("role", "assistant"))
-        with _tracer.start_as_current_span("memory.episodic.store"):
+        with _tracer.start_as_current_span("memory.episodic.store") as span:
+            span.set_attribute("session_id", session_id)
+            span.set_attribute("db.system", "sqlite")
             async with aiosqlite.connect(self._db_path) as db:
                 await db.execute(
                     """
@@ -88,7 +90,11 @@ class EpisodicMemory(BaseMemory):
         sql += " ORDER BY created_at DESC LIMIT ?"
         params.append(query.top_k)
 
-        with _tracer.start_as_current_span("memory.episodic.retrieve"):
+        with _tracer.start_as_current_span("memory.episodic.retrieve") as span:
+            span.set_attribute("db.system", "sqlite")
+            span.set_attribute("memory.top_k", query.top_k)
+            if query.session_id:
+                span.set_attribute("session_id", query.session_id)
             async with aiosqlite.connect(self._db_path) as db:
                 rows = await (await db.execute(sql, params)).fetchall()
 

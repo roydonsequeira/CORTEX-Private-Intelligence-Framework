@@ -51,7 +51,11 @@ class SemanticMemory(BaseMemory):
         """Embed content and upsert it into ChromaDB."""
         await self.initialize()
         assert self._collection is not None
-        with _tracer.start_as_current_span("memory.semantic.store"):
+        with _tracer.start_as_current_span("memory.semantic.store") as span:
+            span.set_attribute("memory.type", entry.memory_type)
+            span.set_attribute("memory.collection", self._collection_name)
+            if "source_session" in entry.metadata:
+                span.set_attribute("session_id", str(entry.metadata["source_session"]))
             embedding = (await self._provider.embed(self._embed_model, entry.content))[0]
             metadata = _metadata_for_chroma(entry)
             self._collection.upsert(
@@ -66,7 +70,11 @@ class SemanticMemory(BaseMemory):
         """Retrieve semantically similar entries from ChromaDB."""
         await self.initialize()
         assert self._collection is not None
-        with _tracer.start_as_current_span("memory.semantic.retrieve"):
+        with _tracer.start_as_current_span("memory.semantic.retrieve") as span:
+            span.set_attribute("memory.collection", self._collection_name)
+            span.set_attribute("memory.top_k", query.top_k)
+            if query.session_id:
+                span.set_attribute("session_id", query.session_id)
             embedding = (await self._provider.embed(self._embed_model, query.text))[0]
             result = self._collection.query(
                 query_embeddings=[embedding],
@@ -94,7 +102,9 @@ class SemanticMemory(BaseMemory):
             ),
             Message(role="user", content=transcript),
         ]
-        with _tracer.start_as_current_span("memory.semantic.consolidate"):
+        with _tracer.start_as_current_span("memory.semantic.consolidate") as span:
+            span.set_attribute("session_id", session_id)
+            span.set_attribute("model_name", self._consolidation_model)
             response = await self._provider.complete(
                 self._consolidation_model,
                 messages,
