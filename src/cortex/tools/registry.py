@@ -94,6 +94,7 @@ class ToolRegistry:
         start = time.monotonic()
         with _tracer.start_as_current_span("tool.execute") as span:
             span.set_attribute("tool_name", tool_name)
+            span.set_attribute("tool.timeout_seconds", self._timeout_seconds)
             try:
                 result = await asyncio.wait_for(
                     tool.execute(**kwargs), timeout=self._timeout_seconds

@@ -8,10 +8,12 @@ from urllib.parse import urlparse
 import html2text
 import httpx
 
+from cortex.observability.tracing import get_tracer
 from cortex.tools.base import BaseTool, ToolResult, ToolSchema
 
 _MAX_RESPONSE_BYTES = 50 * 1024
 _USER_AGENT = "CORTEX/0.1"
+_tracer = get_tracer(__name__)
 
 
 class WebFetchTool(BaseTool):
@@ -42,10 +44,17 @@ class WebFetchTool(BaseTool):
             "markdown" if kwargs.get("format", "markdown") == "markdown" else "text"
         )
         try:
-            if not await self._allowed_by_robots(url):
-                return _result(False, "", start, "Blocked by robots.txt")
-            response = await self._client.get(url, headers={"User-Agent": _USER_AGENT})
-            response.raise_for_status()
+            parsed = urlparse(url)
+            with _tracer.start_as_current_span("http.client.request") as span:
+                span.set_attribute("tool_name", self.schema.name)
+                span.set_attribute("url.full", url)
+                span.set_attribute("server.address", parsed.netloc)
+                span.set_attribute("http.request.method", "GET")
+                if not await self._allowed_by_robots(url):
+                    return _result(False, "", start, "Blocked by robots.txt")
+                response = await self._client.get(url, headers={"User-Agent": _USER_AGENT})
+                response.raise_for_status()
+                span.set_attribute("http.response.status_code", response.status_code)
             raw = response.content[:_MAX_RESPONSE_BYTES].decode(
                 response.encoding or "utf-8", errors="replace"
             )
