@@ -13,6 +13,7 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from cortex.agent.kernel import AgentKernel
 from cortex.agent.supervisor import SupervisorAgent
+from cortex.api.middleware.rate_limit import RateLimitMiddleware
 from cortex.api.middleware.telemetry import telemetry_middleware
 from cortex.api.routes import chat, health, memory, tasks, tools
 from cortex.config import get_settings
@@ -25,7 +26,7 @@ from cortex.models.provider import OllamaProvider
 from cortex.models.router import ModelRouter
 from cortex.observability.logging import configure_logging
 from cortex.observability.metrics import setup_metrics
-from cortex.observability.tracing import setup_tracing
+from cortex.observability.tracing import setup_tracing, shutdown_tracing
 from cortex.tools.builtin import register_builtin_tools
 from cortex.tools.registry import ToolRegistry
 
@@ -46,6 +47,13 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+    )
+    settings = get_settings()
+    app.add_middleware(
+        RateLimitMiddleware,
+        enabled=settings.rate_limit.enabled,
+        requests_per_minute=settings.rate_limit.requests_per_minute,
+        chat_requests_per_minute=settings.rate_limit.chat_requests_per_minute,
     )
     app.middleware("http")(telemetry_middleware)
     app.include_router(chat.router)
@@ -105,15 +113,21 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.started_at = time.monotonic()
     app.state.task_queue = asyncio.Queue()
     app.state.task_results = {}
+    app.state.shutting_down = False
+    app.state.in_flight_runs = 0
     app.state.task_worker = asyncio.create_task(_task_worker(app))
 
     try:
         yield
     finally:
+        logger.info("CORTEX shutting down gracefully")
+        app.state.shutting_down = True
+        await _wait_for_in_flight(app)
         app.state.task_worker.cancel()
         with suppress(asyncio.CancelledError):
             await app.state.task_worker
         await provider.aclose()
+        shutdown_tracing()
 
 
 async def _task_worker(app: FastAPI) -> None:
@@ -152,3 +166,10 @@ async def _run_orchestrated_task(app: FastAPI, item: dict[str, str]) -> dict[str
 def task_session_id(task_id: str) -> str:
     """Return a deterministic session id for queued task work."""
     return f"task-{task_id}"
+
+
+async def _wait_for_in_flight(app: FastAPI, timeout_seconds: float = 30.0) -> None:
+    """Wait for in-flight agent runs to drain up to a timeout."""
+    deadline = time.monotonic() + timeout_seconds
+    while getattr(app.state, "in_flight_runs", 0) > 0 and time.monotonic() < deadline:
+        await asyncio.sleep(0.1)
