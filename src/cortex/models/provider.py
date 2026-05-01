@@ -95,6 +95,7 @@ class OllamaProvider:
         start = time.monotonic()
         with _tracer.start_as_current_span("ollama.complete") as span:
             span.set_attribute("model", model)
+            span.set_attribute("model_name", model)
             try:
                 response = await self._client.post("/api/chat", json=payload)
                 response.raise_for_status()
@@ -105,6 +106,8 @@ class OllamaProvider:
             data = response.json()
             record_llm_latency(latency / 1000, model=model)
             span.set_attribute("latency_ms", latency)
+            span.set_attribute("llm.input_tokens", data.get("prompt_eval_count", 0))
+            span.set_attribute("llm.output_tokens", data.get("eval_count", 0))
 
         msg = data.get("message", {})
         return ModelResponse(
@@ -122,6 +125,8 @@ class OllamaProvider:
         embeddings: list[list[float]] = []
         with _tracer.start_as_current_span("ollama.embed") as span:
             span.set_attribute("model", model)
+            span.set_attribute("model_name", model)
+            span.set_attribute("embedding.input_count", len(inputs))
             for chunk in inputs:
                 try:
                     response = await self._client.post(
