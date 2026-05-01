@@ -29,3 +29,14 @@ def setup_tracing(service_name: str, otel_endpoint: str) -> None:
 def get_tracer(name: str) -> trace.Tracer:
     """Return a named tracer. Uses the configured provider or a no-op fallback."""
     return trace.get_tracer(name)
+
+
+def shutdown_tracing(timeout_millis: int = 5000) -> None:
+    """Flush and shut down the tracer provider without crashing shutdown."""
+    if _tracer_provider is None:
+        return
+    try:
+        _tracer_provider.force_flush(timeout_millis)
+        _tracer_provider.shutdown()
+    except Exception as exc:
+        logger.warning("otel_shutdown_failed", error=str(exc))
