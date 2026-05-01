@@ -74,6 +74,7 @@ class AgentKernel:
 
         with _tracer.start_as_current_span("kernel.run") as span:
             span.set_attribute("session_id", sid)
+            span.set_attribute("orchestration", "react")
 
             context = await self._memory_manager.retrieve_context(user_input, sid)
             if context:
@@ -110,6 +111,7 @@ class AgentKernel:
                         ),
                     },
                 )
+                span.set_attribute("step_count", state.steps_taken)
 
                 state = await self._executor.step(
                     state, self._tool_registry, self._router, event_queue
@@ -156,6 +158,23 @@ class AgentKernel:
         event_queue: asyncio.Queue[dict[str, Any]] | None = None,
     ) -> AgentState:
         """Run the LATS loop and emit compatible SSE events."""
+        with _tracer.start_as_current_span("kernel.lats") as span:
+            span.set_attribute("session_id", session_id)
+            span.set_attribute("orchestration", "lats")
+            span.set_attribute("lats.max_depth", self._settings.lats.max_depth)
+            span.set_attribute("lats.n_branches", self._settings.lats.n_branches)
+            span.set_attribute("lats.budget", self._settings.lats.budget)
+            state = await self._run_lats_inner(user_input, session_id, event_queue)
+            span.set_attribute("step_count", state.steps_taken)
+            return state
+
+    async def _run_lats_inner(
+        self,
+        user_input: str,
+        session_id: str,
+        event_queue: asyncio.Queue[dict[str, Any]] | None = None,
+    ) -> AgentState:
+        """Run LATS once the root span has been opened."""
         await self._emit(event_queue, {"type": "session_id", "value": session_id})
         await self._emit(
             event_queue,
