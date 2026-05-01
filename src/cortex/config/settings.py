@@ -54,6 +54,14 @@ class SupervisorSettings(BaseModel):
     max_workers: int = 3
 
 
+class RateLimitSettings(BaseModel):
+    """Per-IP token bucket rate limit settings."""
+
+    enabled: bool = True
+    requests_per_minute: int = 200
+    chat_requests_per_minute: int = 60
+
+
 class Settings(BaseSettings):
     """All CORTEX runtime configuration. No magic strings in the codebase."""
 
@@ -74,6 +82,7 @@ class Settings(BaseSettings):
     code_exec_timeout_seconds: float = 10.0
     lats: LATSSettings = LATSSettings()
     supervisor: SupervisorSettings = SupervisorSettings()
+    rate_limit: RateLimitSettings = RateLimitSettings()
 
     model_config = {"env_prefix": "CORTEX_", "case_sensitive": False}
 
