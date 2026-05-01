@@ -10,11 +10,13 @@ from pydantic import BaseModel, Field
 
 from cortex.models.provider import GenerationConfig, Message
 from cortex.models.router import ModelCapability, ModelRouter
+from cortex.observability.tracing import get_tracer
 
 if TYPE_CHECKING:
     from cortex.agent.kernel import AgentKernel, AgentState
 
 logger = structlog.get_logger(__name__)
+_tracer = get_tracer(__name__)
 _EXPLORATION_CONSTANT = 1.414
 
 
@@ -73,40 +75,46 @@ class LATSLoop:
         best_value = -1.0
         budget_used = 0
 
-        while budget_used < self._simulation_budget:
-            selected = self._ucb1_select(nodes)
-            if selected.depth >= self._max_depth:
-                selected.value = await self._evaluate_state(selected.state)
-                self._backpropagate(nodes, selected.id, selected.value)
-                budget_used += 1
-                continue
+        with _tracer.start_as_current_span("lats.run") as span:
+            span.set_attribute("session_id", session_id)
+            span.set_attribute("lats.max_depth", self._max_depth)
+            span.set_attribute("lats.n_branches", self._n_branches)
+            span.set_attribute("lats.budget", self._simulation_budget)
+            while budget_used < self._simulation_budget:
+                selected = self._ucb1_select(nodes)
+                span.set_attribute("lats.budget_used", budget_used)
+                if selected.depth >= self._max_depth:
+                    selected.value = await self._evaluate_state(selected.state)
+                    self._backpropagate(nodes, selected.id, selected.value)
+                    budget_used += 1
+                    continue
 
-            branches = await self._expand(task, selected.state)
-            if not branches:
-                break
-
-            for branch in branches[: self._n_branches]:
-                if budget_used >= self._simulation_budget:
+                branches = await self._expand(task, selected.state)
+                if not branches:
                     break
-                child_state = await self._simulate(task, branch, session_id, selected.depth + 1)
-                value = await self._evaluate_state(child_state)
-                child = SearchNode(
-                    id=uuid4().hex,
-                    state=child_state,
-                    parent_id=selected.id,
-                    value=value,
-                    visit_count=1,
-                    depth=selected.depth + 1,
-                )
-                nodes[child.id] = child
-                selected.children.append(child.id)
-                self._backpropagate(nodes, child.id, value)
-                if value > best_value:
-                    best = child_state
-                    best_value = value
-                budget_used += 1
-                if child_state.status == "complete":
-                    return child_state
+
+                for branch in branches[: self._n_branches]:
+                    if budget_used >= self._simulation_budget:
+                        break
+                    child_state = await self._simulate(task, branch, session_id, selected.depth + 1)
+                    value = await self._evaluate_state(child_state)
+                    child = SearchNode(
+                        id=uuid4().hex,
+                        state=child_state,
+                        parent_id=selected.id,
+                        value=value,
+                        visit_count=1,
+                        depth=selected.depth + 1,
+                    )
+                    nodes[child.id] = child
+                    selected.children.append(child.id)
+                    self._backpropagate(nodes, child.id, value)
+                    if value > best_value:
+                        best = child_state
+                        best_value = value
+                    budget_used += 1
+                    if child_state.status == "complete":
+                        return child_state
 
         if best_value < 0:
             root.state.status = "failed"
@@ -124,14 +132,18 @@ class LATSLoop:
             f"Status: {state.status}\n"
             f"Final answer: {state.final_answer or ''}"
         )
-        response = await self._router.complete(
-            ModelCapability.REASONING,
-            [
-                Message(role="system", content="You are a strict agent state evaluator."),
-                Message(role="user", content=prompt),
-            ],
-            GenerationConfig(temperature=0.0, max_tokens=128),
-        )
+        with _tracer.start_as_current_span("lats.evaluate_state") as span:
+            span.set_attribute("session_id", state.session_id)
+            span.set_attribute("step_count", state.steps_taken)
+            span.set_attribute("model_name", self._router.route(ModelCapability.REASONING))
+            response = await self._router.complete(
+                ModelCapability.REASONING,
+                [
+                    Message(role="system", content="You are a strict agent state evaluator."),
+                    Message(role="user", content=prompt),
+                ],
+                GenerationConfig(temperature=0.0, max_tokens=128),
+            )
         try:
             data = json.loads(response.content)
             scores = [
@@ -147,50 +159,57 @@ class LATSLoop:
 
     def _ucb1_select(self, nodes: dict[str, SearchNode]) -> SearchNode:
         """Select the most promising leaf node using UCB1."""
-        candidates = [node for node in nodes.values() if not node.children]
-        if not candidates:
-            candidates = list(nodes.values())
-        unvisited = [node for node in candidates if node.visit_count == 0]
-        if unvisited:
-            return max(unvisited, key=lambda node: node.value)
+        with _tracer.start_as_current_span("lats.ucb1_select") as span:
+            span.set_attribute("lats.node_count", len(nodes))
+            candidates = [node for node in nodes.values() if not node.children]
+            if not candidates:
+                candidates = list(nodes.values())
+            span.set_attribute("lats.candidate_count", len(candidates))
+            unvisited = [node for node in candidates if node.visit_count == 0]
+            if unvisited:
+                return max(unvisited, key=lambda node: node.value)
 
-        def score(node: SearchNode) -> float:
-            if node.parent_id and node.parent_id in nodes:
-                parent_visits = max(1, nodes[node.parent_id].visit_count)
-            else:
-                parent_visits = max(1, sum(n.visit_count for n in nodes.values()))
-            exploitation = node.value
-            exploration = _EXPLORATION_CONSTANT * math.sqrt(
-                math.log(parent_visits + 1) / max(1, node.visit_count)
-            )
-            return exploitation + exploration
+            def score(node: SearchNode) -> float:
+                if node.parent_id and node.parent_id in nodes:
+                    parent_visits = max(1, nodes[node.parent_id].visit_count)
+                else:
+                    parent_visits = max(1, sum(n.visit_count for n in nodes.values()))
+                exploitation = node.value
+                exploration = _EXPLORATION_CONSTANT * math.sqrt(
+                    math.log(parent_visits + 1) / max(1, node.visit_count)
+                )
+                return exploitation + exploration
 
-        return max(candidates, key=score)
+            return max(candidates, key=score)
 
     async def _expand(self, task: str, state: "AgentState") -> list[str]:
         """Ask the LLM for alternative next branches."""
-        response = await self._router.complete(
-            ModelCapability.REASONING,
-            [
-                Message(
-                    role="system",
-                    content=(
-                        "Generate alternative next steps for a Language Agent Tree Search. "
-                        "Return ONLY a JSON array of concise branch descriptions."
+        with _tracer.start_as_current_span("lats.expand") as span:
+            span.set_attribute("session_id", state.session_id)
+            span.set_attribute("model_name", self._router.route(ModelCapability.REASONING))
+            span.set_attribute("lats.n_branches", self._n_branches)
+            response = await self._router.complete(
+                ModelCapability.REASONING,
+                [
+                    Message(
+                        role="system",
+                        content=(
+                            "Generate alternative next steps for a Language Agent Tree Search. "
+                            "Return ONLY a JSON array of concise branch descriptions."
+                        ),
                     ),
-                ),
-                Message(
-                    role="user",
-                    content=(
-                        f"Original task: {task}\n"
-                        f"Current status: {state.status}\n"
-                        f"Current answer: {state.final_answer or ''}\n"
-                        f"Return at most {self._n_branches} branches."
+                    Message(
+                        role="user",
+                        content=(
+                            f"Original task: {task}\n"
+                            f"Current status: {state.status}\n"
+                            f"Current answer: {state.final_answer or ''}\n"
+                            f"Return at most {self._n_branches} branches."
+                        ),
                     ),
-                ),
-            ],
-            GenerationConfig(temperature=0.7, max_tokens=512),
-        )
+                ],
+                GenerationConfig(temperature=0.7, max_tokens=512),
+            )
         try:
             branches = json.loads(response.content)
             if isinstance(branches, list):
@@ -207,19 +226,27 @@ class LATSLoop:
         self, task: str, branch: str, session_id: str, depth: int
     ) -> "AgentState":
         """Simulate one branch with the ReAct loop while disabling nested LATS."""
-        branch_task = f"{task}\n\nCandidate approach: {branch}"
-        return await self._kernel.run(
-            branch_task,
-            session_id=f"{session_id}-lats-{depth}-{uuid4().hex[:8]}",
-            _allow_lats=False,
-        )
+        with _tracer.start_as_current_span("lats.simulate") as span:
+            span.set_attribute("session_id", session_id)
+            span.set_attribute("lats.depth", depth)
+            branch_task = f"{task}\n\nCandidate approach: {branch}"
+            return await self._kernel.run(
+                branch_task,
+                session_id=f"{session_id}-lats-{depth}-{uuid4().hex[:8]}",
+                _allow_lats=False,
+            )
 
     def _backpropagate(self, nodes: dict[str, SearchNode], node_id: str, value: float) -> None:
         """Propagate a child value up through ancestors."""
-        current_id: str | None = node_id
-        while current_id is not None and current_id in nodes:
-            node = nodes[current_id]
-            total = node.value * node.visit_count + value
-            node.visit_count += 1
-            node.value = total / node.visit_count
-            current_id = node.parent_id
+        with _tracer.start_as_current_span("lats.backpropagate") as span:
+            span.set_attribute("lats.value", value)
+            current_id: str | None = node_id
+            depth = 0
+            while current_id is not None and current_id in nodes:
+                node = nodes[current_id]
+                total = node.value * node.visit_count + value
+                node.visit_count += 1
+                node.value = total / node.visit_count
+                current_id = node.parent_id
+                depth += 1
+            span.set_attribute("lats.backprop_depth", depth)
