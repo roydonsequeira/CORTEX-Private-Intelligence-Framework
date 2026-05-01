@@ -5,12 +5,14 @@
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Docker](https://img.shields.io/badge/Docker-Compose-blue)
+![FastAPI](https://img.shields.io/badge/API-FastAPI-009688)
+![Next.js](https://img.shields.io/badge/UI-Next.js-black)
 
 ## What is CORTEX?
 
-Cloud AI is powerful — but everything you send is logged, retained, and used to train future models. Every query, every document, every private thought you share with a cloud assistant leaves a trace you do not control.
+Cloud AI is powerful, but everything you send to it can be logged, retained, inspected, or used to train future models. Prompts, files, private notes, source code, and research questions leave your machine and enter systems you do not control.
 
-CORTEX is the answer. A fully local, privacy-first autonomous agent framework that runs entirely on your own hardware. No API keys. No cloud calls. No data ever leaving your machine. Built with production-grade Python, not a Jupyter notebook or a LangChain wrapper.
+CORTEX is a fully local, privacy-first AI agent framework that runs on your own hardware. It combines Ollama models, a production FastAPI runtime, a Next.js operator UI, four-tier memory, sandboxed tools, LATS reasoning, supervisor-worker orchestration, and OpenTelemetry observability without requiring cloud API keys.
 
 ## Architecture
 
@@ -20,129 +22,159 @@ CORTEX is the answer. A fully local, privacy-first autonomous agent framework th
 │                                                                               │
 │  ┌──────────────┐     ┌────────────────────────────────────────────────┐    │
 │  │   Next.js UI │────▶│              FastAPI Gateway                    │    │
-│  │  (Port 3000) │     │  /chat  /tasks  /memory  /tools  /traces       │    │
+│  │  (Port 3000) │     │  /chat  /tasks  /memory  /tools  /health       │    │
 │  └──────────────┘     └────────────────┬───────────────────────────────┘    │
 │                                        │                                      │
 │                        ┌──────────────▼──────────────┐                      │
 │                        │        Agent Kernel          │                      │
-│                        │  ┌──────────┐  ┌─────────┐  │                      │
-│                        │  │  Planner │  │Reflector│  │                      │
-│                        │  └────┬─────┘  └────┬────┘  │                      │
-│                        │  ┌────▼──────────────▼────┐  │                      │
-│                        │  │    LATS / ReAct Loop   │  │                      │
-│                        │  └────────────┬───────────┘  │                      │
-│                        └──────────────┼──────────────┘                      │
+│                        │  Planner · Executor · Reflector                    │
+│                        │  ReAct · LATS · Supervisor                         │
+│                        └──────────────┬──────────────┘                      │
 │           ┌───────────────────────────┼───────────────────────────┐         │
 │   ┌───────▼──────┐         ┌──────────▼─────────┐      ┌─────────▼──────┐  │
 │   │ Memory Stack │         │   Tool Registry     │      │  Model Router  │  │
-│   │ • Working    │         │ • Filesystem        │      │ • Ollama       │  │
-│   │ • Episodic   │         │ • Code Exec (jail)  │      │ • llama3.1:8b  │  │
-│   │ • Semantic   │         │ • Web Scraper       │      │ • qwen2.5:14b  │  │
-│   │ • Procedural │         │ • Doc Search        │      │ • deepseek-r1  │  │
-│   └──────────────┘         │ • Plugin Loader     │      └────────────────┘  │
-│   ┌──────────────┐         └─────────────────────┘                          │
-│   │  ChromaDB    │                                                            │
-│   │  (local)     │                                                            │
+│   │ Working      │         │ Filesystem          │      │ Ollama         │  │
+│   │ Episodic     │         │ Python sandbox      │      │ llama3.1:8b    │  │
+│   │ Semantic     │         │ Web fetch           │      │ deepseek-r1    │  │
+│   │ Procedural   │         │ Document search     │      │ nomic-embed    │  │
+│   └──────┬───────┘         │ Plugin loader       │      └────────────────┘  │
+│          │                 └─────────────────────┘                          │
+│   ┌──────▼───────┐                                                            │
+│   │ Local stores │ SQLite episodes · Chroma vectors                           │
 │   └──────────────┘                                                            │
 │   ┌───────────────────────────────────────────────────────────────────────┐  │
-│   │   OpenTelemetry Collector → Jaeger UI (Port 16686)                    │  │
+│   │ OpenTelemetry → OTLP gRPC → Jaeger UI (http://localhost:16686)        │  │
 │   └───────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Features
 
-- **Multi-tier memory**: working → episodic (SQLite) → semantic (ChromaDB) → procedural
-- **LATS-augmented ReAct loop**: Language Agent Tree Search for non-trivial tasks
-- **Hot-swappable models**: swap Ollama models at runtime, no restart
-- **Sandboxed code execution**: RestrictedPython jail — no unrestricted `exec()`
-- **Plugin-first tool registry**: drop a `.py` file in `tools/plugins/`, it auto-registers
-- **Full OpenTelemetry observability**: traces visible in Jaeger from day one
-- **Production-grade Python**: typed, tested, structured — not a script, not a notebook
-- **Docker Compose stack**: one command to spin up the entire infrastructure
+- **Multi-tier memory:** working → episodic SQLite → semantic ChromaDB → procedural tool patterns.
+- **LATS-augmented ReAct:** Language Agent Tree Search for hard tasks where a linear loop stalls.
+- **Supervisor-worker orchestration:** decomposes complex jobs into parallel sub-agent runs and aggregates results.
+- **Sandboxed tool execution:** RestrictedPython code execution, filesystem guardrails, web fetching, document indexing.
+- **Plugin-first tools:** drop a `BaseTool` subclass into `src/cortex/tools/plugins/` and restart.
+- **Streaming API:** Server-Sent Events for plans, steps, tool calls, tokens, and completion events.
+- **Operator UI:** terminal-inspired Next.js interface with memory search and execution trace panel.
+- **OpenTelemetry by default:** FastAPI, model calls, tools, memory, and agent spans exported to Jaeger.
+- **Release hardening:** request IDs, token bucket rate limiting, graceful shutdown, strict typing, CI.
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/yourusername/CORTEX-Private-Intelligence-Framework.git
+git clone https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework.git
 cd CORTEX-Private-Intelligence-Framework
 make up
 make pull-models
-# Open http://localhost:8000/docs for the API, http://localhost:16686 for traces
 ```
 
-## Stack
-
-| Component | Choice |
-|---|---|
-| LLM Runtime | Ollama |
-| Primary Model | llama3.1:8b / qwen2.5:14b |
-| Reasoning Model | deepseek-r1:8b |
-| Embeddings | nomic-embed-text |
-| Vector Store | ChromaDB |
-| Session DB | SQLite (aiosqlite) |
-| Backend | FastAPI + uvicorn |
-| Observability | OpenTelemetry + Jaeger |
-| Frontend | Next.js 14 (Phase 5) |
+Open:
+- UI: http://localhost:3000
+- API docs: http://localhost:8000/docs
+- Jaeger traces: http://localhost:16686
 
 ## Configuration
 
-All configuration lives in `cortex.yaml`:
+All runtime configuration lives in `cortex.yaml` and can be overridden with `CORTEX_` environment variables.
 
 | Key | Default | Description |
 |---|---|---|
 | `ollama_base_url` | `http://localhost:11434` | Ollama server URL |
-| `ollama_model` | `llama3.1:8b` | Default FAST model |
+| `ollama_model` | `llama3.1:8b` | Default fast model |
 | `embed_model` | `nomic-embed-text` | Embedding model |
-| `chroma_path` | `./.cortex/chroma` | ChromaDB storage path |
-| `db_path` | `./.cortex/cortex.db` | SQLite session DB path |
-| `api_port` | `8000` | FastAPI port |
-| `log_level` | `INFO` | Logging level |
+| `chroma_path` | `./.cortex/chroma` | Local Chroma persistence path |
+| `db_path` | `./.cortex/cortex.db` | SQLite episodic memory path |
+| `api_host` / `api_port` | `0.0.0.0` / `8000` | FastAPI bind address |
 | `otel_endpoint` | `http://localhost:4317` | OTLP gRPC endpoint |
-| `max_agent_steps` | `20` | Max ReAct loop iterations |
+| `max_agent_steps` | `20` | ReAct loop budget |
+| `lats.enabled` | `false` | Enable LATS globally |
+| `lats.max_depth` | `5` | LATS tree depth |
+| `lats.n_branches` | `3` | LATS branch factor |
+| `lats.budget` | `10` | LATS simulation budget |
+| `supervisor.max_workers` | `3` | Parallel worker limit |
+| `rate_limit.enabled` | `true` | Enable API rate limiting |
+| `rate_limit.requests_per_minute` | `200` | Default per-IP route limit |
+| `rate_limit.chat_requests_per_minute` | `60` | Per-IP `/chat` limit |
 
-Override any value with an env var: `CORTEX_API_PORT=9000`.
+## Tool System
 
-## Writing a Plugin Tool
-
-Drop a `.py` file in `src/cortex/tools/plugins/` and restart CORTEX:
+Create plugins by inheriting from `BaseTool`, defining a JSON schema, and implementing `execute()`:
 
 ```python
-from cortex.tools.base import BaseTool, ToolResult, ToolSchema
 from typing import ClassVar
+from cortex.tools.base import BaseTool, ToolResult, ToolSchema
 
-class MyTool(BaseTool):
+class EchoTool(BaseTool):
     schema: ClassVar[ToolSchema] = ToolSchema(
-        name="my_tool",
-        description="Does something useful.",
+        name="echo",
+        description="Echo input text.",
         parameters={
             "type": "object",
-            "properties": {"input": {"type": "string"}},
-            "required": ["input"],
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+            "additionalProperties": False,
         },
     )
 
-    async def execute(self, input: str, **kwargs) -> ToolResult:
+    async def execute(self, **kwargs: object) -> ToolResult:
         return ToolResult(
-            tool_name="my_tool",
+            tool_name=self.schema.name,
             success=True,
-            output=f"Processed: {input}",
-            execution_time_ms=1.0,
+            output=str(kwargs["text"]),
+            execution_time_ms=0.0,
         )
 ```
+
+Drop the file in `src/cortex/tools/plugins/` and restart CORTEX.
+
+## Memory Architecture
+
+```mermaid
+flowchart TD
+    request[User Request] --> working[Working Memory]
+    working --> episodic[Episodic Memory SQLite]
+    episodic --> semantic[Semantic Memory ChromaDB]
+    tools[Tool Success Patterns] --> procedural[Procedural Memory ChromaDB]
+    semantic --> context[Relevant Memory Context]
+    episodic --> context
+    procedural --> planner[Planner Hints]
+```
+
+## Observability
+
+CORTEX exports OpenTelemetry spans for HTTP requests, agent planning/execution/reflection, Ollama calls, SQLite memory, Chroma memory, tool execution, LATS, supervisor workers, and web fetches.
+
+Jaeger is available at `http://localhost:16686`.
+
+Screenshot placeholder:
+
+```
+docs/assets/jaeger-trace-placeholder.png
+```
+
+## API Examples
+
+```bash
+curl -X POST http://localhost:8000/chat/message \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Tell me the time","session_id":null}'
+```
+
+See [DEMO.md](DEMO.md) for reproducible examples.
 
 ## Implementation Status
 
 | Phase | Description | Status |
 |---|---|---|
-| Phase 0 | Foundation, config, Docker, telemetry | ✅ Complete |
-| Phase 1 | Model provider, agent kernel, ReAct loop | ✅ Complete |
-| Phase 2 | Multi-tier memory architecture | 🔜 Planned |
-| Phase 3 | Tool registry + built-in tools | 🔜 Planned |
-| Phase 4 | FastAPI + SSE streaming | 🔜 Planned |
-| Phase 5 | Next.js UI | 🔜 Planned |
-| Phase 6 | LATS + multi-agent supervisor | 🔜 Planned |
-| Phase 7 | Observability, hardening, release | 🔜 Planned |
+| Phase 0 | Foundation, config, Docker, telemetry | Complete |
+| Phase 1 | Model provider, router, agent kernel | Complete |
+| Phase 2 | Multi-tier memory architecture | Complete |
+| Phase 3 | Tool registry and built-in tools | Complete |
+| Phase 4 | FastAPI API and SSE streaming | Complete |
+| Phase 5 | Next.js operator UI | Complete |
+| Phase 6 | LATS and supervisor multi-agent orchestration | Complete |
+| Phase 7 | Observability, hardening, docs, release | Complete |
 
 ## Roadmap
 
@@ -153,7 +185,7 @@ class MyTool(BaseTool):
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). PRs welcome for new tool plugins, memory backends, and model provider adapters.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Good first PRs include new tool plugins, memory backends, model provider adapters, and UI trace visualizations. Architecture decisions live in [docs/architecture-decisions](docs/architecture-decisions).
 
 ## License
 
