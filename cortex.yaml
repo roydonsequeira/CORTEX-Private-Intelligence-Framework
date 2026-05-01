@@ -25,3 +25,7 @@ lats:
   budget: 10
 supervisor:
   max_workers: 3
+rate_limit:
+  enabled: true
+  requests_per_minute: 200
+  chat_requests_per_minute: 60
