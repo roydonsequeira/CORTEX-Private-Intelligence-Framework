@@ -47,6 +47,8 @@ class Executor:
         with _tracer.start_as_current_span("executor.step") as span:
             span.set_attribute("session_id", state.session_id)
             span.set_attribute("step", state.steps_taken)
+            span.set_attribute("step_count", state.steps_taken)
+            span.set_attribute("model_name", router.route(ModelCapability.FAST))
 
             context_messages = [Message(role="system", content=_SYSTEM_PROMPT)]
             if state.plan:
@@ -105,6 +107,10 @@ class Executor:
                 raw_args if isinstance(raw_args, dict) else json.loads(raw_args)
             )
 
+            with _tracer.start_as_current_span("executor.tool_call") as span:
+                span.set_attribute("session_id", state.session_id)
+                span.set_attribute("tool_name", tool_name)
+                span.set_attribute("step_count", state.steps_taken)
             await self._emit(
                 event_queue,
                 {"type": "tool_call", "tool": tool_name, "args": kwargs},

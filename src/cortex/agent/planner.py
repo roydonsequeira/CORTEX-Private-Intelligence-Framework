@@ -41,7 +41,9 @@ class Planner:
                 content=f"Task: {user_input}\nAvailable tools: {tools_summary}",
             ),
         ]
-        with _tracer.start_as_current_span("planner.decompose"):
+        with _tracer.start_as_current_span("planner.decompose") as span:
+            span.set_attribute("model_name", self._router.route(ModelCapability.REASONING))
+            span.set_attribute("tool_count", len(available_tools))
             response = await self._router.complete(
                 ModelCapability.REASONING,
                 messages,

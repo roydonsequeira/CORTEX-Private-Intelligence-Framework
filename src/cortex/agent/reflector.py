@@ -50,7 +50,10 @@ class Reflector:
             ),
         ]
 
-        with _tracer.start_as_current_span("reflector.evaluate"):
+        with _tracer.start_as_current_span("reflector.evaluate") as span:
+            span.set_attribute("session_id", state.session_id)
+            span.set_attribute("step_count", state.steps_taken)
+            span.set_attribute("model_name", self._router.route(ModelCapability.FAST))
             response = await self._router.complete(
                 ModelCapability.FAST,
                 messages,
