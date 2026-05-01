@@ -12,8 +12,10 @@ from pydantic import BaseModel, Field
 from cortex.agent.kernel import AgentKernel, AgentState
 from cortex.models.provider import GenerationConfig, Message
 from cortex.models.router import ModelCapability, ModelRouter
+from cortex.observability.tracing import get_tracer
 
 logger = structlog.get_logger(__name__)
+_tracer = get_tracer(__name__)
 
 
 class SubTask(BaseModel):
@@ -52,48 +54,54 @@ class SupervisorAgent:
 
     async def run(self, task: str, session_id: str) -> SupervisorResult:
         """Decompose a task, run workers in parallel, and aggregate outputs."""
-        subtasks = await self._decompose(task)
-        if not subtasks:
+        with _tracer.start_as_current_span("supervisor.run") as span:
+            span.set_attribute("session_id", session_id)
+            span.set_attribute("supervisor.max_workers", self._max_workers)
+            subtasks = await self._decompose(task)
+            span.set_attribute("supervisor.subtask_count", len(subtasks))
+            if not subtasks:
+                return SupervisorResult(
+                    session_id=session_id,
+                    task=task,
+                    subtasks=[],
+                    sub_states=[],
+                    final_answer="Supervisor could not decompose the task.",
+                    status="failed",
+                )
+
+            runnable = subtasks[: self._max_workers]
+            sub_states = await asyncio.gather(
+                *(self._run_subtask(subtask, session_id) for subtask in runnable)
+            )
+            final_answer = await self._aggregate(sub_states, task)
             return SupervisorResult(
                 session_id=session_id,
                 task=task,
-                subtasks=[],
-                sub_states=[],
-                final_answer="Supervisor could not decompose the task.",
-                status="failed",
+                subtasks=runnable,
+                sub_states=sub_states,
+                final_answer=final_answer,
+                status="complete" if final_answer else "failed",
             )
-
-        runnable = subtasks[: self._max_workers]
-        sub_states = await asyncio.gather(
-            *(self._run_subtask(subtask, session_id) for subtask in runnable)
-        )
-        final_answer = await self._aggregate(sub_states, task)
-        return SupervisorResult(
-            session_id=session_id,
-            task=task,
-            subtasks=runnable,
-            sub_states=sub_states,
-            final_answer=final_answer,
-            status="complete" if final_answer else "failed",
-        )
 
     async def _decompose(self, task: str) -> list[SubTask]:
         """Return independent sub-tasks that can run in parallel."""
-        response = await self._router.complete(
-            ModelCapability.REASONING,
-            [
-                Message(
-                    role="system",
-                    content=(
-                        "Decompose this task into independent sub-tasks that can be "
-                        "worked on in parallel. Each sub-task must be self-contained. "
-                        "Output JSON array of sub-task descriptions. Maximum 4 sub-tasks."
+        with _tracer.start_as_current_span("supervisor.decompose") as span:
+            span.set_attribute("model_name", self._router.route(ModelCapability.REASONING))
+            response = await self._router.complete(
+                ModelCapability.REASONING,
+                [
+                    Message(
+                        role="system",
+                        content=(
+                            "Decompose this task into independent sub-tasks that can be "
+                            "worked on in parallel. Each sub-task must be self-contained. "
+                            "Output JSON array of sub-task descriptions. Maximum 4 sub-tasks."
+                        ),
                     ),
-                ),
-                Message(role="user", content=task),
-            ],
-            GenerationConfig(temperature=0.2, max_tokens=1024),
-        )
+                    Message(role="user", content=task),
+                ],
+                GenerationConfig(temperature=0.2, max_tokens=1024),
+            )
         descriptions = _parse_json_list(response.content)
         return [
             SubTask(
@@ -110,50 +118,57 @@ class SupervisorAgent:
             f"Worker {idx + 1} ({state.status}): {state.final_answer or ''}"
             for idx, state in enumerate(sub_results)
         )
-        response = await self._router.complete(
-            ModelCapability.REASONING,
-            [
-                Message(
-                    role="system",
-                    content=(
-                        "You are synthesizing the results of parallel research tasks. "
-                        "Combine the following results into a coherent, well-structured "
-                        "answer to the original task."
+        with _tracer.start_as_current_span("supervisor.aggregate") as span:
+            span.set_attribute("model_name", self._router.route(ModelCapability.REASONING))
+            span.set_attribute("supervisor.sub_result_count", len(sub_results))
+            response = await self._router.complete(
+                ModelCapability.REASONING,
+                [
+                    Message(
+                        role="system",
+                        content=(
+                            "You are synthesizing the results of parallel research tasks. "
+                            "Combine the following results into a coherent, well-structured "
+                            "answer to the original task."
+                        ),
                     ),
-                ),
-                Message(
-                    role="user",
-                    content=f"Original task: {original_task}\n\nSub-results:\n{outputs}",
-                ),
-            ],
-            GenerationConfig(temperature=0.2, max_tokens=2048),
-        )
+                    Message(
+                        role="user",
+                        content=f"Original task: {original_task}\n\nSub-results:\n{outputs}",
+                    ),
+                ],
+                GenerationConfig(temperature=0.2, max_tokens=2048),
+            )
         return response.content.strip()
 
     async def _run_subtask(self, subtask: SubTask, session_id: str) -> AgentState:
         """Run one worker kernel and attach the result to the subtask."""
-        subtask.status = "running"
-        kernel = self._kernel_factory()
-        try:
-            state = await kernel.run(
-                subtask.description,
-                session_id=f"{session_id}-{subtask.assigned_to}",
-                _allow_lats=False,
-            )
-            subtask.result = state
-            subtask.status = "done" if state.status == "complete" else "failed"
-            return state
-        except Exception as exc:
-            logger.warning("supervisor_worker_failed", subtask=subtask.id, error=str(exc))
-            state = AgentState(
-                session_id=f"{session_id}-{subtask.assigned_to}",
-                user_input=subtask.description,
-                final_answer=str(exc),
-                status="failed",
-            )
-            subtask.result = state
-            subtask.status = "failed"
-            return state
+        with _tracer.start_as_current_span("supervisor.worker") as span:
+            span.set_attribute("session_id", session_id)
+            span.set_attribute("worker_id", subtask.assigned_to)
+            subtask.status = "running"
+            kernel = self._kernel_factory()
+            try:
+                state = await kernel.run(
+                    subtask.description,
+                    session_id=f"{session_id}-{subtask.assigned_to}",
+                    _allow_lats=False,
+                )
+                span.set_attribute("step_count", state.steps_taken)
+                subtask.result = state
+                subtask.status = "done" if state.status == "complete" else "failed"
+                return state
+            except Exception as exc:
+                logger.warning("supervisor_worker_failed", subtask=subtask.id, error=str(exc))
+                state = AgentState(
+                    session_id=f"{session_id}-{subtask.assigned_to}",
+                    user_input=subtask.description,
+                    final_answer=str(exc),
+                    status="failed",
+                )
+                subtask.result = state
+                subtask.status = "failed"
+                return state
 
 
 def _parse_json_list(raw: str) -> list[str]:
