@@ -75,6 +75,8 @@ def app() -> FastAPI:
     app.state.started_at = 1.0
     app.state.task_queue = asyncio.Queue()
     app.state.task_results = {}
+    app.state.shutting_down = False
+    app.state.in_flight_runs = 0
     return app
 
 
@@ -141,3 +143,54 @@ async def test_tasks_accept_orchestration_mode(app: FastAPI) -> None:
     assert response.status_code == 200
     queued = await app.state.task_queue.get()
     assert queued["orchestration"] == "supervisor"
+
+
+@pytest.mark.asyncio
+async def test_chat_rejects_invalid_session_id(app: FastAPI) -> None:
+    """Chat requests validate session_id as UUID."""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/chat/message",
+            json={"message": "hello", "session_id": "not-a-uuid"},
+        )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_chat_returns_503_when_shutting_down(app: FastAPI) -> None:
+    """New chat work is rejected while graceful shutdown is draining."""
+    app.state.shutting_down = True
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/chat/message", json={"message": "hello"})
+
+    assert response.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_returns_429() -> None:
+    """Rate limiter returns 429 with Retry-After when the bucket is empty."""
+    from cortex.api.middleware.rate_limit import RateLimitMiddleware
+
+    limited = FastAPI()
+    limited.add_middleware(
+        RateLimitMiddleware,
+        enabled=True,
+        requests_per_minute=1,
+        chat_requests_per_minute=1,
+    )
+
+    @limited.get("/limited")
+    async def limited_route() -> dict[str, str]:
+        return {"ok": "true"}
+
+    transport = httpx.ASGITransport(app=limited)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        first = await client.get("/limited")
+        second = await client.get("/limited")
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert "Retry-After" in second.headers
