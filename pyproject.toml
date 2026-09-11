@@ -50,6 +50,12 @@ where = ["src"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Live-model tests are opt-in: run them with `pytest -m ollama` against a
+# running Ollama. They are deselected from the default suite and CI.
+addopts = "-m 'not ollama'"
+markers = [
+    "ollama: integration tests that require a running Ollama server (deselected by default)",
+]
 
 [tool.ruff]
 src = ["src"]
