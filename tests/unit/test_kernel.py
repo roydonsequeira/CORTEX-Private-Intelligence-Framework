@@ -1,6 +1,8 @@
 """Unit tests for AgentKernel — router, tool_registry, and memory are mocked."""
 
-from typing import Any
+import asyncio
+from collections.abc import AsyncIterator
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -9,7 +11,8 @@ from cortex.agent.kernel import AgentKernel, AgentState
 from cortex.agent.loop import LATSLoop
 from cortex.config.settings import Settings
 from cortex.memory.manager import MemoryManager
-from cortex.models.provider import ModelResponse
+from cortex.memory.procedural import ToolPattern
+from cortex.models.provider import ModelResponse, StreamChunk
 from cortex.models.router import ModelRouter
 from cortex.tools.base import ToolResult
 from cortex.tools.registry import ToolRegistry
@@ -75,6 +78,8 @@ def _make_kernel(settings: Settings | None = None) -> tuple[AgentKernel, MagicMo
     memory_manager.retrieve_context = AsyncMock(return_value="")
     memory_manager.store_turn = AsyncMock()
     memory_manager.end_session = AsyncMock()
+    memory_manager.retrieve_tool_patterns = AsyncMock(return_value=[])
+    memory_manager.store_tool_pattern = AsyncMock()
 
     cfg = settings or Settings(
         ollama_base_url="http://fake:11434",
@@ -200,6 +205,97 @@ async def test_run_reflector_falls_back_to_lats(monkeypatch: pytest.MonkeyPatch)
 
     assert state is lats_state
     run_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_records_tool_pattern_on_success() -> None:
+    """A successful run that used a tool stores a procedural pattern of that sequence."""
+    kernel, router, _ = _make_kernel(
+        Settings(ollama_base_url="http://fake:11434", max_agent_steps=10, stream_tokens=False)
+    )
+    router.complete.side_effect = [
+        _mock_model_response('["use the tool", "answer"]'),
+        _mock_tool_call_response("dummy"),
+        _mock_model_response('{"progress": true}'),
+        _mock_model_response("Final answer."),
+    ]
+
+    state = await kernel.run("a task that uses a tool")
+
+    memory_manager = cast(MagicMock, kernel._memory_manager)
+    assert state.status == "complete"
+    memory_manager.store_tool_pattern.assert_awaited_once()
+    kwargs = memory_manager.store_tool_pattern.await_args.kwargs
+    assert kwargs["tool_sequence"] == ["dummy"]
+    assert kwargs["success"] is True
+    assert kwargs["task_description"] == "a task that uses a tool"
+
+
+@pytest.mark.asyncio
+async def test_run_threads_pattern_hint_into_planner() -> None:
+    """A retrieved pattern is threaded into the planner prompt as a hint."""
+    kernel, router, _ = _make_kernel(
+        Settings(ollama_base_url="http://fake:11434", max_agent_steps=5, stream_tokens=False)
+    )
+    memory_manager = cast(MagicMock, kernel._memory_manager)
+    memory_manager.retrieve_tool_patterns = AsyncMock(
+        return_value=[
+            ToolPattern(
+                task_description="past task",
+                tool_sequence=["calculator", "python_exec"],
+                success=True,
+                avg_steps=2,
+            )
+        ]
+    )
+    router.complete.side_effect = [
+        _mock_model_response('["single step"]'),
+        _mock_model_response("Done."),
+    ]
+
+    await kernel.run("a similar task")
+
+    planner_messages = router.complete.await_args_list[0].args[1]
+    planner_user_content = planner_messages[-1].content
+    assert "calculator, python_exec" in planner_user_content
+    assert "similar task used these tools" in planner_user_content
+
+
+def _drain(queue: asyncio.Queue[dict[str, Any]]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+    return events
+
+
+@pytest.mark.asyncio
+async def test_run_streams_real_tokens_before_done() -> None:
+    """With streaming on and a queue, token events arrive as the model generates."""
+    kernel, router, _ = _make_kernel(
+        Settings(ollama_base_url="http://fake:11434", max_agent_steps=5, stream_tokens=True)
+    )
+    router.complete.side_effect = [_mock_model_response('["Answer the user directly"]')]
+
+    async def fake_stream(*_args: Any, **_kwargs: Any) -> AsyncIterator[StreamChunk]:
+        for piece in ["Hel", "lo, ", "world", "!"]:
+            yield StreamChunk(content=piece)
+        yield StreamChunk(content="", done=True, output_tokens=4)
+
+    router.stream_complete = fake_stream
+
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    state = await kernel.run("say hello", event_queue=queue)
+
+    events = _drain(queue)
+    token_events = [e for e in events if e["type"] == "token"]
+    types = [e["type"] for e in events]
+
+    assert state.final_answer == "Hello, world!"
+    assert state.streamed_final is True
+    assert len(token_events) > 1
+    # tokens are emitted before the done event, not chunked after it
+    assert types.index("token") < types.index("done")
+    assert "".join(e["value"] for e in token_events) == "Hello, world!"
 
 
 @pytest.mark.asyncio

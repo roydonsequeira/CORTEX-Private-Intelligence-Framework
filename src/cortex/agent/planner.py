@@ -28,18 +28,28 @@ class Planner:
     def __init__(self, router: ModelRouter) -> None:
         self._router = router
 
-    async def decompose(self, user_input: str, available_tools: list[str]) -> list[str]:
+    async def decompose(
+        self,
+        user_input: str,
+        available_tools: list[str],
+        hints: list[str] | None = None,
+    ) -> list[str]:
         """Return a list of step descriptions for the given task.
 
-        Raises CortexPlannerError if the model returns unparseable output.
+        ``hints`` are optional lines derived from procedural memory (tool-use
+        patterns from similar past tasks) that bias the planner toward proven
+        approaches. Raises CortexPlannerError if the model returns unparseable output.
         """
         tools_summary = ", ".join(available_tools) if available_tools else "none"
+        user_content = f"Task: {user_input}\nAvailable tools: {tools_summary}"
+        if hints:
+            hint_block = "\n".join(f"- {hint}" for hint in hints)
+            user_content += (
+                f"\n\nHints from similar past tasks (reuse what fits):\n{hint_block}"
+            )
         messages = [
             Message(role="system", content=_SYSTEM_PROMPT),
-            Message(
-                role="user",
-                content=f"Task: {user_input}\nAvailable tools: {tools_summary}",
-            ),
+            Message(role="user", content=user_content),
         ]
         with _tracer.start_as_current_span("planner.decompose") as span:
             span.set_attribute("model_name", self._router.route(ModelCapability.REASONING))

@@ -76,7 +76,7 @@ Open:
 
 ## Configuration
 
-All runtime configuration lives in `cortex.yaml` and can be overridden with `CORTEX_` environment variables.
+All runtime configuration lives in `cortex.yaml` and can be overridden with `CORTEX_` environment variables. CORTEX finds `cortex.yaml` by walking up from the current working directory, so it works from any subdirectory; set `CORTEX_CONFIG` to point at an explicit config file.
 
 | Key | Default | Description |
 |---|---|---|
@@ -88,6 +88,8 @@ All runtime configuration lives in `cortex.yaml` and can be overridden with `COR
 | `api_host` / `api_port` | `0.0.0.0` / `8000` | FastAPI bind address |
 | `otel_endpoint` | `http://localhost:4317` | OTLP gRPC endpoint |
 | `max_agent_steps` | `20` | ReAct loop budget |
+| `stream_tokens` | `true` | Stream final-answer tokens from Ollama as they generate |
+| `procedural_memory_enabled` | `true` | Learn tool-use patterns and feed them to the planner |
 | `lats.enabled` | `false` | Enable LATS globally |
 | `lats.max_depth` | `5` | LATS tree depth |
 | `lats.n_branches` | `3` | LATS branch factor |

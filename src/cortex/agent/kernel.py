@@ -34,6 +34,7 @@ class AgentState(BaseModel):
     tool_results: list[ToolResult] = Field(default_factory=list)
     final_answer: str | None = None
     status: Literal["planning", "executing", "reflecting", "complete", "failed"] = "planning"
+    streamed_final: bool = False
 
 
 class AgentKernel:
@@ -54,7 +55,7 @@ class AgentKernel:
         self._memory_manager = memory_manager
         self._settings = settings
         self._planner = Planner(router)
-        self._executor = Executor()
+        self._executor = Executor(stream=settings.stream_tokens)
 
     async def run(
         self,
@@ -85,9 +86,12 @@ class AgentKernel:
             await self._emit(event_queue, {"type": "session_id", "value": sid})
 
             state.status = "planning"
+            hints = await self._retrieve_pattern_hints(user_input, sid)
             try:
                 tool_names = [s.name for s in self._tool_registry.list_tools()]
-                state.plan = await self._planner.decompose(user_input, tool_names)
+                state.plan = await self._planner.decompose(
+                    user_input, tool_names, hints=hints
+                )
             except Exception as exc:
                 logger.warning("planner_failed", error=str(exc), session_id=sid)
                 state.plan = [user_input]
@@ -134,7 +138,10 @@ class AgentKernel:
                 state.status = "failed"
                 state.final_answer = state.final_answer or "Maximum steps reached without answer."
 
-            if state.final_answer:
+            if state.status == "complete":
+                await self._record_pattern(user_input, state, sid)
+
+            if state.final_answer and not state.streamed_final:
                 for chunk in _chunk_text(state.final_answer):
                     await self._emit(event_queue, {"type": "token", "value": chunk})
 
@@ -150,6 +157,39 @@ class AgentKernel:
             status=state.status,
         )
         return state
+
+    async def _retrieve_pattern_hints(self, user_input: str, sid: str) -> list[str]:
+        """Return planner hints from procedural memory for similar past tasks."""
+        if not self._settings.procedural_memory_enabled:
+            return []
+        try:
+            patterns = await self._memory_manager.retrieve_tool_patterns(user_input)
+        except Exception as exc:  # procedural memory is advisory, never fatal
+            logger.warning("pattern_retrieval_failed", error=str(exc), session_id=sid)
+            return []
+        return [
+            f"A similar task used these tools in order: "
+            f"{', '.join(p.tool_sequence)} (took {p.avg_steps} step(s))."
+            for p in patterns
+            if p.success and p.tool_sequence
+        ]
+
+    async def _record_pattern(self, user_input: str, state: AgentState, sid: str) -> None:
+        """Persist the tool sequence of a successful run for future planner hints."""
+        if not self._settings.procedural_memory_enabled:
+            return
+        tool_sequence = [result.tool_name for result in state.tool_results]
+        if not tool_sequence:
+            return  # nothing procedural to learn from a pure-reasoning answer
+        try:
+            await self._memory_manager.store_tool_pattern(
+                task_description=user_input,
+                tool_sequence=tool_sequence,
+                success=True,
+                avg_steps=state.steps_taken,
+            )
+        except Exception as exc:  # learning is best-effort, never fatal to the run
+            logger.warning("pattern_store_failed", error=str(exc), session_id=sid)
 
     async def _run_lats(
         self,
@@ -204,7 +244,12 @@ class AgentKernel:
 
 
 def _chunk_text(text: str, chunk_size: int = 80) -> list[str]:
-    """Chunk final answers into token-like SSE payloads until true LLM streaming lands."""
+    """Chunk a finished answer into token-like SSE payloads.
+
+    Used only for answers that were not produced by real token streaming: the
+    ``stream_tokens=False`` fallback, and LATS results (which are selected from a
+    search tree post-hoc rather than generated in a single streamed pass).
+    """
     if not text:
         return []
     return [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
