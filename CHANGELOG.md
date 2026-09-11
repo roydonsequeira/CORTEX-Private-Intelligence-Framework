@@ -8,6 +8,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Pluggable code-execution sandbox (`code_sandbox`): the default `restricted`
+  in-process backend, and a `container` backend that runs each snippet in an
+  ephemeral Docker container (network disabled, read-only rootfs, dropped
+  capabilities, `no-new-privileges`, tmpfs workdir, CPU/memory/pid limits) for
+  OS-level isolation of untrusted code. Install with `cortex-agent[container]`.
 - Real token streaming from Ollama (`stream: true`) with a `StreamChunk` API on
   the provider and router; the executor streams final-answer tokens to SSE
   clients as they generate. Gated by `stream_tokens` (default on).

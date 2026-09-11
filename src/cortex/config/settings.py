@@ -106,6 +106,11 @@ class Settings(BaseSettings):
     allowed_write_extensions: list[str] = [".txt", ".md", ".json", ".csv", ".py"]
     tool_timeout_seconds: float = 30.0
     code_exec_timeout_seconds: float = 10.0
+    code_sandbox: Literal["restricted", "container"] = "restricted"
+    code_sandbox_image: str = "python:3.12-slim"
+    code_sandbox_mem_limit: str = "256m"
+    code_sandbox_pids_limit: int = 128
+    code_sandbox_cpus: float = 0.5
     lats: LATSSettings = LATSSettings()
     supervisor: SupervisorSettings = SupervisorSettings()
     rate_limit: RateLimitSettings = RateLimitSettings()

@@ -30,6 +30,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+container = [
+    "docker>=7.0,<8.0",
+]
 dev = [
     "pytest>=8,<10",
     "pytest-asyncio>=0.24,<2.0",
@@ -63,5 +66,5 @@ strict = true
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["RestrictedPython", "RestrictedPython.*"]
+module = ["RestrictedPython", "RestrictedPython.*", "docker", "docker.*"]
 ignore_missing_imports = true
