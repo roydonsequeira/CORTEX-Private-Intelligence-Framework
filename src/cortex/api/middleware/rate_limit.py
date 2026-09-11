@@ -7,6 +7,8 @@ from typing import Any
 from fastapi import Request, Response
 from starlette.responses import JSONResponse
 
+_BUCKET_TTL_SECONDS = 600.0
+
 
 @dataclass
 class TokenBucket:
@@ -17,7 +19,11 @@ class TokenBucket:
 
 
 class RateLimitMiddleware:
-    """Per-IP token bucket limiter with separate chat and general limits."""
+    """Per-IP token bucket limiter with separate chat and general limits.
+
+    Buckets idle longer than ``_BUCKET_TTL_SECONDS`` are evicted on each request
+    so the bucket dict cannot grow unbounded across many unique client IPs.
+    """
 
     def __init__(
         self,
@@ -59,6 +65,7 @@ class RateLimitMiddleware:
     def _consume(self, client: str, route_class: str, limit: int) -> float | None:
         """Consume a token or return retry-after seconds."""
         now = time.monotonic()
+        self._evict_stale(now)
         key = (client, route_class)
         bucket = self._buckets.get(key)
         if bucket is None:
@@ -72,3 +79,13 @@ class RateLimitMiddleware:
             bucket.tokens -= 1.0
             return None
         return (1.0 - bucket.tokens) / refill_rate
+
+    def _evict_stale(self, now: float) -> None:
+        """Drop buckets untouched for longer than the TTL to bound memory use."""
+        stale = [
+            key
+            for key, bucket in self._buckets.items()
+            if now - bucket.updated_at > _BUCKET_TTL_SECONDS
+        ]
+        for key in stale:
+            del self._buckets[key]

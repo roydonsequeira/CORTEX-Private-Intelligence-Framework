@@ -194,3 +194,19 @@ async def test_rate_limit_returns_429() -> None:
     assert first.status_code == 200
     assert second.status_code == 429
     assert "Retry-After" in second.headers
+
+
+def test_rate_limiter_evicts_idle_buckets() -> None:
+    """Buckets idle past the TTL are evicted so the dict cannot grow unbounded."""
+    from cortex.api.middleware.rate_limit import _BUCKET_TTL_SECONDS, RateLimitMiddleware
+
+    middleware = RateLimitMiddleware(app=None, requests_per_minute=100)
+    middleware._consume("1.1.1.1", "default", 100)
+    assert ("1.1.1.1", "default") in middleware._buckets
+
+    # Age the first client's bucket well past the eviction TTL.
+    middleware._buckets[("1.1.1.1", "default")].updated_at -= _BUCKET_TTL_SECONDS + 1
+    middleware._consume("2.2.2.2", "default", 100)
+
+    assert ("1.1.1.1", "default") not in middleware._buckets
+    assert ("2.2.2.2", "default") in middleware._buckets

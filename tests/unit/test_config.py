@@ -41,6 +41,34 @@ def test_env_var_overrides_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert s.api_port == 7777
 
 
+def test_settings_load_from_parent_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cortex.yaml is discovered by walking up from a nested working directory."""
+    (tmp_path / "cortex.yaml").write_text(yaml.dump({"api_port": 9100}))
+    nested = tmp_path / "a" / "b"
+    nested.mkdir(parents=True)
+    monkeypatch.chdir(nested)
+    get_settings.cache_clear()
+    s = get_settings()
+    assert s.api_port == 9100
+
+
+def test_settings_load_from_cortex_config_env_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CORTEX_CONFIG points the loader at an explicit config file anywhere."""
+    config_file = tmp_path / "custom-config.yaml"
+    config_file.write_text(yaml.dump({"api_port": 9200}))
+    work_dir = tmp_path / "elsewhere"
+    work_dir.mkdir()
+    monkeypatch.chdir(work_dir)
+    monkeypatch.setenv("CORTEX_CONFIG", str(config_file))
+    get_settings.cache_clear()
+    s = get_settings()
+    assert s.api_port == 9200
+
+
 def test_get_settings_is_singleton() -> None:
     """get_settings() returns the same instance on repeated calls."""
     s1 = get_settings()
