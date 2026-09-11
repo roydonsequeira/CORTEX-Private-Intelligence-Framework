@@ -1,5 +1,3 @@
-version: "3.9"
-
 networks:
   cortex-net:
     driver: bridge
@@ -21,14 +19,8 @@ services:
               count: all
               capabilities: [gpu]
 
-  chromadb:
-    image: chromadb/chroma:latest
-    ports:
-      - "8001:8000"
-    volumes:
-      - ./chroma_data:/chroma/chroma
-    networks:
-      - cortex-net
+  # ChromaDB runs embedded inside cortex-api via chromadb.PersistentClient and is
+  # persisted to the cortex_data volume; no standalone Chroma container is needed.
 
   jaeger:
     image: jaegertracing/all-in-one:latest
@@ -51,7 +43,6 @@ services:
       - CORTEX_OTEL_ENDPOINT=http://jaeger:4317
     depends_on:
       - ollama
-      - chromadb
       - jaeger
     networks:
       - cortex-net
