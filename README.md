@@ -128,6 +128,17 @@ class EchoTool(BaseTool):
 
 Drop the file in `src/cortex/tools/plugins/` and restart CORTEX.
 
+## Security Model
+
+CORTEX is designed to run on hardware you control, and its guardrails are built for that threat model — chiefly to contain code the LLM generates when a prompt is malicious or injected.
+
+- **Code execution** is compiled with RestrictedPython and run in a separate spawned process with a hard timeout. The attribute guard blocks dunder access and any traversal that would return a module object, closing escapes such as `json → codecs → sys → sys.modules['os']`. RestrictedPython is a best-effort in-process sandbox, **not** a guarantee against a determined adversary. For untrusted or multi-tenant workloads, run the executor inside the provided Docker container so the OS process boundary is the real isolation layer.
+- **Filesystem** access is confined to a configurable workspace root, rejects `..` traversal and absolute paths, enforces read/write size caps, and restricts writable extensions.
+- **Web fetch** honours `robots.txt`, caps response size, and fails closed to an offline message when the network is unavailable.
+- **API** requests are validated with Pydantic, rate limited per IP with a token bucket, and refused while the server drains for graceful shutdown.
+
+Report security issues privately via a GitHub security advisory rather than a public issue.
+
 ## Memory Architecture
 
 ```mermaid
