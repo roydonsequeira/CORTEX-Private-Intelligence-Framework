@@ -25,6 +25,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   SQLite backend so task results survive an API restart.
 - Config discovery — `cortex.yaml` is found by walking up from the working
   directory, and `CORTEX_CONFIG` can point at an explicit file.
+- LATS depth: evaluation results are memoised per state, and a `lats.evaluator`
+  switch selects a model or a cheap heuristic value estimate.
+- Opt-in live-model smoke tests behind an `ollama` pytest marker (deselected by
+  default) covering completion, streaming, a full kernel tool-call + memory run,
+  and an end-to-end LATS run.
 
 ### Changed
 

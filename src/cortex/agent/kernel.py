@@ -226,6 +226,7 @@ class AgentKernel:
             max_depth=self._settings.lats.max_depth,
             n_branches=self._settings.lats.n_branches,
             simulation_budget=self._settings.lats.budget,
+            evaluator=self._settings.lats.evaluator,
         )
         state = await loop.run(user_input, session_id)
         if state.final_answer:

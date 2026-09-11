@@ -66,6 +66,7 @@ class LATSSettings(BaseModel):
     max_depth: int = 5
     n_branches: int = 3
     budget: int = 10
+    evaluator: Literal["model", "heuristic"] = "model"
 
 
 class SupervisorSettings(BaseModel):

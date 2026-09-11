@@ -99,6 +99,7 @@ All runtime configuration lives in `cortex.yaml` and can be overridden with `COR
 | `lats.max_depth` | `5` | LATS tree depth |
 | `lats.n_branches` | `3` | LATS branch factor |
 | `lats.budget` | `10` | LATS simulation budget |
+| `lats.evaluator` | `model` | LATS state scoring: `model` (LLM) or `heuristic` (fast, no LLM) |
 | `supervisor.max_workers` | `3` | Parallel worker limit |
 | `rate_limit.enabled` | `true` | Enable API rate limiting |
 | `rate_limit.requests_per_minute` | `200` | Default per-IP route limit |
