@@ -13,9 +13,11 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from cortex.agent.kernel import AgentKernel
 from cortex.agent.supervisor import SupervisorAgent
+from cortex.api.middleware.auth import APIKeyMiddleware
 from cortex.api.middleware.rate_limit import RateLimitMiddleware
 from cortex.api.middleware.telemetry import telemetry_middleware
 from cortex.api.routes import chat, health, memory, tasks, tools
+from cortex.api.task_store import create_task_store
 from cortex.config import get_settings
 from cortex.memory.episodic import EpisodicMemory
 from cortex.memory.manager import MemoryManager
@@ -41,20 +43,21 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=_lifespan,
     )
+    settings = get_settings()
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=settings.cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    settings = get_settings()
     app.add_middleware(
         RateLimitMiddleware,
         enabled=settings.rate_limit.enabled,
         requests_per_minute=settings.rate_limit.requests_per_minute,
         chat_requests_per_minute=settings.rate_limit.chat_requests_per_minute,
     )
+    app.add_middleware(APIKeyMiddleware, api_key=settings.api_key)
     app.middleware("http")(telemetry_middleware)
     app.include_router(chat.router)
     app.include_router(tasks.router)
@@ -112,7 +115,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.supervisor_agent = supervisor
     app.state.started_at = time.monotonic()
     app.state.task_queue = asyncio.Queue()
-    app.state.task_results = {}
+    task_store = create_task_store(settings)
+    await task_store.initialize()
+    app.state.task_store = task_store
     app.state.shutting_down = False
     app.state.in_flight_runs = 0
     app.state.task_worker = asyncio.create_task(_task_worker(app))
@@ -135,16 +140,17 @@ async def _task_worker(app: FastAPI) -> None:
     while True:
         item = await app.state.task_queue.get()
         task_id = item["task_id"]
-        app.state.task_results[task_id] = {"task_id": task_id, "status": "running"}
+        await app.state.task_store.set(task_id, {"task_id": task_id, "status": "running"})
         try:
             result = await _run_orchestrated_task(app, item)
-            app.state.task_results[task_id] = {"task_id": task_id, "status": "done", "result": result}
+            await app.state.task_store.set(
+                task_id, {"task_id": task_id, "status": "done", "result": result}
+            )
         except Exception as exc:
-            app.state.task_results[task_id] = {
-                "task_id": task_id,
-                "status": "failed",
-                "error": str(exc),
-            }
+            await app.state.task_store.set(
+                task_id,
+                {"task_id": task_id, "status": "failed", "error": str(exc)},
+            )
         finally:
             app.state.task_queue.task_done()
 

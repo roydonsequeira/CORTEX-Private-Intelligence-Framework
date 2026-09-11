@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, field_validator
@@ -90,8 +90,12 @@ class Settings(BaseSettings):
     embed_model: str = "nomic-embed-text"
     chroma_path: Path = Path("./.cortex/chroma")
     db_path: Path = Path("./.cortex/cortex.db")
+    task_store: Literal["memory", "sqlite"] = "memory"
+    task_db_path: Path = Path("./.cortex/tasks.db")
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+    api_key: str | None = None
+    cors_origins: list[str] = ["*"]
     log_level: str = "INFO"
     otel_endpoint: str = "http://localhost:4317"
     max_agent_steps: int = 20

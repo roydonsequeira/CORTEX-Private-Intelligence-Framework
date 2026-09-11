@@ -86,6 +86,10 @@ All runtime configuration lives in `cortex.yaml` and can be overridden with `COR
 | `chroma_path` | `./.cortex/chroma` | Local Chroma persistence path |
 | `db_path` | `./.cortex/cortex.db` | SQLite episodic memory path |
 | `api_host` / `api_port` | `0.0.0.0` / `8000` | FastAPI bind address |
+| `api_key` | `null` | When set, require `Authorization: Bearer <key>` on all routes except `/health` and docs |
+| `cors_origins` | `["*"]` | Allowed CORS origins; narrow this before exposing the API |
+| `task_store` | `memory` | Task result backend: `memory` (lost on restart) or `sqlite` (durable) |
+| `task_db_path` | `./.cortex/tasks.db` | SQLite path for the durable task store |
 | `otel_endpoint` | `http://localhost:4317` | OTLP gRPC endpoint |
 | `max_agent_steps` | `20` | ReAct loop budget |
 | `stream_tokens` | `true` | Stream final-answer tokens from Ollama as they generate |
@@ -137,7 +141,7 @@ CORTEX is designed to run on hardware you control, and its guardrails are built 
 - **Code execution** is compiled with RestrictedPython and run in a separate spawned process with a hard timeout. The attribute guard blocks dunder access and any traversal that would return a module object, closing escapes such as `json → codecs → sys → sys.modules['os']`. RestrictedPython is a best-effort in-process sandbox, **not** a guarantee against a determined adversary. For untrusted or multi-tenant workloads, run the executor inside the provided Docker container so the OS process boundary is the real isolation layer.
 - **Filesystem** access is confined to a configurable workspace root, rejects `..` traversal and absolute paths, enforces read/write size caps, and restricts writable extensions.
 - **Web fetch** honours `robots.txt`, caps response size, and fails closed to an offline message when the network is unavailable.
-- **API** requests are validated with Pydantic, rate limited per IP with a token bucket, and refused while the server drains for graceful shutdown.
+- **API** requests are validated with Pydantic, rate limited per IP with a token bucket, and refused while the server drains for graceful shutdown. Authentication is off by default for localhost; set `api_key` (e.g. via `CORTEX_API_KEY`) to require a bearer token on every route except `/health` and the docs, and narrow `cors_origins` before exposing the API beyond your machine.
 
 Report security issues privately via a GitHub security advisory rather than a public issue.
 
