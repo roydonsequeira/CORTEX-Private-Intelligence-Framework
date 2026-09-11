@@ -7,10 +7,12 @@ import json
 import math
 import multiprocessing
 import time
+import types
 from datetime import datetime
 from typing import Any
 
 from RestrictedPython import compile_restricted
+from RestrictedPython.Eval import default_guarded_getitem
 from RestrictedPython.Guards import guarded_iter_unpack_sequence, safe_builtins
 from RestrictedPython.PrintCollector import PrintCollector
 
@@ -21,7 +23,15 @@ _MAX_OUTPUT_CHARS = 8192
 
 
 class CodeExecutionTool(BaseTool):
-    """Execute Python code in a restricted sandbox."""
+    """Execute Python code in a restricted, best-effort sandbox.
+
+    Code is compiled with RestrictedPython and run in a separate spawned process
+    with a hard timeout. Attribute access is guarded so that sandboxed code cannot
+    traverse from the whitelisted stdlib helpers into arbitrary modules (e.g. the
+    ``json -> codecs -> sys -> sys.modules['os']`` escape). RestrictedPython is not
+    a security boundary against a determined adversary; for untrusted workloads run
+    CORTEX's executor inside the provided Docker container for OS-level isolation.
+    """
 
     schema = ToolSchema(
         name="python_exec",
@@ -105,6 +115,22 @@ def _run_code(code: str) -> str:
     return "\n".join(parts).strip()
 
 
+def _guarded_getattr(obj: object, name: str, default: Any = None) -> Any:
+    """Attribute guard: block dunders and any access that yields a module object.
+
+    Returning module objects is the primary sandbox-escape vector: from a single
+    whitelisted module (e.g. ``json``) an attacker can otherwise reach ``codecs``,
+    then ``sys``, then ``sys.modules['os']``. Blocking underscore-prefixed names
+    and module returns closes that traversal.
+    """
+    if name.startswith("_"):
+        raise AttributeError(f"access to '{name}' is not permitted in the sandbox")
+    value = getattr(obj, name, default)
+    if isinstance(value, types.ModuleType):
+        raise AttributeError(f"access to module '{name}' is not permitted in the sandbox")
+    return value
+
+
 def _safe_globals() -> dict[str, Any]:
     """Return the restricted globals dict used for all code execution."""
     builtins = dict(safe_builtins)
@@ -125,7 +151,8 @@ def _safe_globals() -> dict[str, Any]:
     return {
         "__builtins__": builtins,
         "_print_": PrintCollector,
-        "_getattr_": getattr,
+        "_getattr_": _guarded_getattr,
+        "_getitem_": default_guarded_getitem,
         "_getiter_": iter,
         "_iter_unpack_sequence_": guarded_iter_unpack_sequence,
         "json": json,

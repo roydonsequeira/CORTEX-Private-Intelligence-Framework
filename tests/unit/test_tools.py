@@ -49,6 +49,24 @@ async def test_code_execution_tool_blocks_imports() -> None:
 
 
 @pytest.mark.asyncio
+async def test_code_execution_tool_blocks_module_traversal_escape() -> None:
+    """Sandbox blocks the json -> codecs -> sys -> os module-traversal escape."""
+    result = await CodeExecutionTool().execute(
+        code="os = json.codecs.sys.modules.get('os')\nprint(os.getcwd())"
+    )
+    assert result.success is False
+    assert "getcwd" not in result.output
+
+
+@pytest.mark.asyncio
+async def test_code_execution_tool_allows_subscripting() -> None:
+    """Sandbox permits ordinary subscripting (guarded _getitem_)."""
+    result = await CodeExecutionTool().execute(code="print([10, 20, 30][1])")
+    assert result.success is True
+    assert "20" in result.output
+
+
+@pytest.mark.asyncio
 async def test_code_execution_tool_timeout() -> None:
     """CodeExecutionTool enforces a timeout."""
     tool = CodeExecutionTool(timeout_seconds=0.01)
