@@ -76,7 +76,7 @@ Open:
 
 ## Configuration
 
-All runtime configuration lives in `cortex.yaml` and can be overridden with `CORTEX_` environment variables.
+All runtime configuration lives in `cortex.yaml` and can be overridden with `CORTEX_` environment variables. CORTEX finds `cortex.yaml` by walking up from the current working directory, so it works from any subdirectory; set `CORTEX_CONFIG` to point at an explicit config file.
 
 | Key | Default | Description |
 |---|---|---|
@@ -86,12 +86,20 @@ All runtime configuration lives in `cortex.yaml` and can be overridden with `COR
 | `chroma_path` | `./.cortex/chroma` | Local Chroma persistence path |
 | `db_path` | `./.cortex/cortex.db` | SQLite episodic memory path |
 | `api_host` / `api_port` | `0.0.0.0` / `8000` | FastAPI bind address |
+| `api_key` | `null` | When set, require `Authorization: Bearer <key>` on all routes except `/health` and docs |
+| `cors_origins` | `["*"]` | Allowed CORS origins; narrow this before exposing the API |
+| `task_store` | `memory` | Task result backend: `memory` (lost on restart) or `sqlite` (durable) |
+| `task_db_path` | `./.cortex/tasks.db` | SQLite path for the durable task store |
 | `otel_endpoint` | `http://localhost:4317` | OTLP gRPC endpoint |
 | `max_agent_steps` | `20` | ReAct loop budget |
+| `code_sandbox` | `restricted` | Code execution backend: `restricted` (in-process) or `container` (Docker isolation) |
+| `stream_tokens` | `true` | Stream final-answer tokens from Ollama as they generate |
+| `procedural_memory_enabled` | `true` | Learn tool-use patterns and feed them to the planner |
 | `lats.enabled` | `false` | Enable LATS globally |
 | `lats.max_depth` | `5` | LATS tree depth |
 | `lats.n_branches` | `3` | LATS branch factor |
 | `lats.budget` | `10` | LATS simulation budget |
+| `lats.evaluator` | `model` | LATS state scoring: `model` (LLM) or `heuristic` (fast, no LLM) |
 | `supervisor.max_workers` | `3` | Parallel worker limit |
 | `rate_limit.enabled` | `true` | Enable API rate limiting |
 | `rate_limit.requests_per_minute` | `200` | Default per-IP route limit |
@@ -132,10 +140,12 @@ Drop the file in `src/cortex/tools/plugins/` and restart CORTEX.
 
 CORTEX is designed to run on hardware you control, and its guardrails are built for that threat model — chiefly to contain code the LLM generates when a prompt is malicious or injected.
 
-- **Code execution** is compiled with RestrictedPython and run in a separate spawned process with a hard timeout. The attribute guard blocks dunder access and any traversal that would return a module object, closing escapes such as `json → codecs → sys → sys.modules['os']`. RestrictedPython is a best-effort in-process sandbox, **not** a guarantee against a determined adversary. For untrusted or multi-tenant workloads, run the executor inside the provided Docker container so the OS process boundary is the real isolation layer.
+- **Code execution** uses a pluggable sandbox backend selected by `code_sandbox`:
+  - `restricted` (default) — compiled with RestrictedPython and run in a separate spawned process with a hard timeout. The attribute guard blocks dunder access and any traversal that would return a module object, closing escapes such as `json → codecs → sys → sys.modules['os']`. This is a best-effort in-process sandbox, **not** a guarantee against a determined adversary.
+  - `container` — each snippet runs in an ephemeral Docker container with the network disabled, a read-only root filesystem, all Linux capabilities dropped, `no-new-privileges`, a tmpfs workdir, and CPU/memory/pid limits, so the OS process boundary is the real isolation layer. Use this for untrusted or multi-tenant workloads (`pip install 'cortex-agent[container]'`).
 - **Filesystem** access is confined to a configurable workspace root, rejects `..` traversal and absolute paths, enforces read/write size caps, and restricts writable extensions.
 - **Web fetch** honours `robots.txt`, caps response size, and fails closed to an offline message when the network is unavailable.
-- **API** requests are validated with Pydantic, rate limited per IP with a token bucket, and refused while the server drains for graceful shutdown.
+- **API** requests are validated with Pydantic, rate limited per IP with a token bucket, and refused while the server drains for graceful shutdown. Authentication is off by default for localhost; set `api_key` (e.g. via `CORTEX_API_KEY`) to require a bearer token on every route except `/health` and the docs, and narrow `cors_origins` before exposing the API beyond your machine.
 
 Report security issues privately via a GitHub security advisory rather than a public issue.
 
@@ -196,7 +206,7 @@ See [DEMO.md](DEMO.md) for reproducible examples.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Good first PRs include new tool plugins, memory backends, model provider adapters, and UI trace visualizations. Architecture decisions live in [docs/architecture-decisions](docs/architecture-decisions).
+See [CONTRIBUTING.md](CONTRIBUTING.md) and our [Code of Conduct](CODE_OF_CONDUCT.md). Good first PRs include new tool plugins, memory backends, model provider adapters, and UI trace visualizations. Architecture decisions live in [docs/architecture-decisions](docs/architecture-decisions). Changes are tracked in [CHANGELOG.md](CHANGELOG.md); report vulnerabilities privately per [SECURITY.md](SECURITY.md).
 
 ## License
 

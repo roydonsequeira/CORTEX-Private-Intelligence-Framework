@@ -10,6 +10,7 @@ from fastapi import FastAPI
 
 from cortex.agent.kernel import AgentState
 from cortex.api.server import create_app
+from cortex.api.task_store import InMemoryTaskStore
 from cortex.models.provider import Message
 from cortex.tools.base import ToolSchema
 
@@ -74,7 +75,7 @@ def app() -> FastAPI:
     app.state.tool_registry = _FakeToolRegistry()
     app.state.started_at = 1.0
     app.state.task_queue = asyncio.Queue()
-    app.state.task_results = {}
+    app.state.task_store = InMemoryTaskStore()
     app.state.shutting_down = False
     app.state.in_flight_runs = 0
     return app
@@ -194,3 +195,78 @@ async def test_rate_limit_returns_429() -> None:
     assert first.status_code == 200
     assert second.status_code == 429
     assert "Retry-After" in second.headers
+
+
+def _api_key_app() -> FastAPI:
+    """A minimal app protected by APIKeyMiddleware with a known key."""
+    from cortex.api.middleware.auth import APIKeyMiddleware
+
+    protected = FastAPI()
+    protected.add_middleware(APIKeyMiddleware, api_key="s3cret")
+
+    @protected.get("/tools")
+    async def tools_route() -> dict[str, str]:
+        return {"ok": "true"}
+
+    @protected.get("/health")
+    async def health_route() -> dict[str, str]:
+        return {"status": "healthy"}
+
+    return protected
+
+
+@pytest.mark.asyncio
+async def test_api_key_rejects_missing_key() -> None:
+    """A configured API key returns 401 when the bearer token is absent."""
+    transport = httpx.ASGITransport(app=_api_key_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/tools")
+
+    assert response.status_code == 401
+    assert response.headers.get("WWW-Authenticate") == "Bearer"
+
+
+@pytest.mark.asyncio
+async def test_api_key_accepts_valid_key() -> None:
+    """A correct bearer token is accepted on a protected route."""
+    transport = httpx.ASGITransport(app=_api_key_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/tools", headers={"Authorization": "Bearer s3cret"})
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_api_key_health_is_always_open() -> None:
+    """/health never requires a key even when one is configured."""
+    transport = httpx.ASGITransport(app=_api_key_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/health")
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_api_key_disabled_when_unset(app: FastAPI) -> None:
+    """With no key configured (localhost default), routes stay open."""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/tools")
+
+    assert response.status_code == 200
+
+
+def test_rate_limiter_evicts_idle_buckets() -> None:
+    """Buckets idle past the TTL are evicted so the dict cannot grow unbounded."""
+    from cortex.api.middleware.rate_limit import _BUCKET_TTL_SECONDS, RateLimitMiddleware
+
+    middleware = RateLimitMiddleware(app=None, requests_per_minute=100)
+    middleware._consume("1.1.1.1", "default", 100)
+    assert ("1.1.1.1", "default") in middleware._buckets
+
+    # Age the first client's bucket well past the eviction TTL.
+    middleware._buckets[("1.1.1.1", "default")].updated_at -= _BUCKET_TTL_SECONDS + 1
+    middleware._consume("2.2.2.2", "default", 100)
+
+    assert ("1.1.1.1", "default") not in middleware._buckets
+    assert ("2.2.2.2", "default") in middleware._buckets

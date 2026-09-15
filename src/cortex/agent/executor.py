@@ -32,6 +32,12 @@ current step. When you have a final answer, reply directly without calling any t
 class Executor:
     """Executes a single ReAct step: think → act → observe."""
 
+    def __init__(self, stream: bool = False) -> None:
+        """Create an executor. When ``stream`` is set, final-answer tokens are
+        streamed to the event queue as the model generates them.
+        """
+        self._stream = stream
+
     async def step(
         self,
         state: "AgentState",
@@ -64,30 +70,67 @@ class Executor:
             context_messages.extend(state.messages)
 
             ollama_tools = tool_registry.to_ollama_tools()
+            tools_arg = ollama_tools if ollama_tools else None
 
-            response = await router.complete(
-                ModelCapability.FAST,
-                context_messages,
-                GenerationConfig(temperature=0.3),
-                tools=ollama_tools if ollama_tools else None,
-            )
+            if self._stream and event_queue is not None:
+                content, raw_tool_calls, streamed = await self._stream_step(
+                    context_messages, tools_arg, router, event_queue
+                )
+            else:
+                response = await router.complete(
+                    ModelCapability.FAST,
+                    context_messages,
+                    GenerationConfig(temperature=0.3),
+                    tools=tools_arg,
+                )
+                content = response.content
+                raw_tool_calls = response.raw.get("message", {}).get("tool_calls")
+                streamed = False
 
             state.steps_taken += 1
             increment_agent_steps(model=router.route(ModelCapability.FAST))
 
-            raw_tool_calls = response.raw.get("message", {}).get("tool_calls")
             if raw_tool_calls:
                 state = await self._handle_tool_calls(
                     raw_tool_calls, state, tool_registry, router, event_queue
                 )
             else:
-                state.messages.append(
-                    Message(role="assistant", content=response.content)
-                )
-                state.final_answer = response.content
+                state.messages.append(Message(role="assistant", content=content))
+                state.final_answer = content
                 state.status = "complete"
+                state.streamed_final = streamed
 
         return state
+
+    async def _stream_step(
+        self,
+        context_messages: list[Message],
+        tools_arg: list[dict[str, Any]] | None,
+        router: ModelRouter,
+        event_queue: asyncio.Queue[dict[str, Any]],
+    ) -> tuple[str, list[dict[str, Any]] | None, bool]:
+        """Stream a step, emitting token events, and return (content, tool_calls, streamed).
+
+        ``streamed`` is True only when the step produced a final answer that was
+        emitted token-by-token (i.e. no tool call), so the kernel can avoid
+        re-emitting it.
+        """
+        parts: list[str] = []
+        tool_calls: list[dict[str, Any]] | None = None
+        emitted = False
+        async for chunk in router.stream_complete(
+            ModelCapability.FAST,
+            context_messages,
+            GenerationConfig(temperature=0.3),
+            tools=tools_arg,
+        ):
+            if chunk.content:
+                parts.append(chunk.content)
+                await self._emit(event_queue, {"type": "token", "value": chunk.content})
+                emitted = True
+            if chunk.tool_calls:
+                tool_calls = chunk.tool_calls
+        return "".join(parts), tool_calls, emitted and tool_calls is None
 
     async def _handle_tool_calls(
         self,

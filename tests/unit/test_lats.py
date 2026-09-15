@@ -73,6 +73,46 @@ async def test_evaluate_state_returns_score_between_zero_and_one() -> None:
 
 
 @pytest.mark.asyncio
+async def test_evaluate_state_caches_by_state() -> None:
+    """Equivalent states are scored once; the cached value is reused."""
+    router = MagicMock(spec=ModelRouter)
+    router.complete = AsyncMock(
+        return_value=_response(
+            '{"goal_completion": 0.8, "factual_correctness": 0.6, "conciseness": 0.7}'
+        )
+    )
+    loop = LATSLoop(MagicMock(), router)
+    state = AgentState(
+        session_id="s", user_input="task", final_answer="answer", status="complete"
+    )
+
+    first = await loop._evaluate_state(state)
+    second = await loop._evaluate_state(state)
+
+    assert first == second
+    router.complete.assert_awaited_once()  # second call served from cache
+
+
+@pytest.mark.asyncio
+async def test_heuristic_evaluator_skips_the_model() -> None:
+    """The heuristic evaluator scores without any LLM call."""
+    router = MagicMock(spec=ModelRouter)
+    router.complete = AsyncMock()
+    loop = LATSLoop(MagicMock(), router, evaluator="heuristic")
+
+    complete = await loop._evaluate_state(
+        AgentState(session_id="s", user_input="t", final_answer="done", status="complete")
+    )
+    failed = await loop._evaluate_state(
+        AgentState(session_id="s", user_input="t", status="failed")
+    )
+
+    assert complete == 1.0
+    assert failed == 0.0
+    router.complete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_lats_run_terminates_when_budget_exhausted() -> None:
     """run() terminates when the simulation budget is exhausted."""
     router = MagicMock(spec=ModelRouter)

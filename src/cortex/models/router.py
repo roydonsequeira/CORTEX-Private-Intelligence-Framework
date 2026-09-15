@@ -1,10 +1,17 @@
 """Model router — selects the right Ollama model for a given capability."""
 
+from collections.abc import AsyncIterator
 from enum import StrEnum
 from typing import Any
 
 from cortex.config.settings import Settings
-from cortex.models.provider import GenerationConfig, Message, ModelResponse, OllamaProvider
+from cortex.models.provider import (
+    GenerationConfig,
+    Message,
+    ModelResponse,
+    OllamaProvider,
+    StreamChunk,
+)
 
 
 class ModelCapability(StrEnum):
@@ -55,6 +62,18 @@ class ModelRouter:
         """Delegate a completion call to the provider using the routed model."""
         model = self.route(capability)
         return await self._provider.complete(model, messages, config, tools)
+
+    async def stream_complete(
+        self,
+        capability: ModelCapability,
+        messages: list[Message],
+        config: GenerationConfig | None = None,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[StreamChunk]:
+        """Stream a completion from the routed model, yielding StreamChunk deltas."""
+        model = self.route(capability)
+        async for chunk in self._provider.stream_complete(model, messages, config, tools):
+            yield chunk
 
     async def embed(self, text: str | list[str]) -> list[list[float]]:
         """Embed text using the configured embedding model."""

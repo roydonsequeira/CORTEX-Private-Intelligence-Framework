@@ -1,22 +1,42 @@
 """Typed configuration for CORTEX, loaded from cortex.yaml with env var overrides."""
 
+import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, field_validator
 from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 
+_CONFIG_FILENAME = "cortex.yaml"
+_CONFIG_ENV_VAR = "CORTEX_CONFIG"
+
+
+def _resolve_config_path() -> Path | None:
+    """Locate cortex.yaml: an explicit CORTEX_CONFIG, else the nearest one at or
+    above the current working directory, so CORTEX works from any subdirectory.
+    """
+    override = os.environ.get(_CONFIG_ENV_VAR)
+    if override:
+        candidate = Path(override)
+        return candidate if candidate.is_file() else None
+    cwd = Path.cwd()
+    for directory in (cwd, *cwd.parents):
+        candidate = directory / _CONFIG_FILENAME
+        if candidate.is_file():
+            return candidate
+    return None
+
 
 class _YamlSource(PydanticBaseSettingsSource):
-    """Reads settings from cortex.yaml located at the current working directory."""
+    """Reads settings from the resolved cortex.yaml (see _resolve_config_path)."""
 
     def _load(self) -> dict[str, Any]:
-        yaml_path = Path("cortex.yaml")
-        if not yaml_path.exists():
+        config_path = _resolve_config_path()
+        if config_path is None:
             return {}
-        with yaml_path.open() as f:
+        with config_path.open() as f:
             return yaml.safe_load(f) or {}
 
     def get_field_value(
@@ -46,6 +66,7 @@ class LATSSettings(BaseModel):
     max_depth: int = 5
     n_branches: int = 3
     budget: int = 10
+    evaluator: Literal["model", "heuristic"] = "model"
 
 
 class SupervisorSettings(BaseModel):
@@ -70,16 +91,27 @@ class Settings(BaseSettings):
     embed_model: str = "nomic-embed-text"
     chroma_path: Path = Path("./.cortex/chroma")
     db_path: Path = Path("./.cortex/cortex.db")
+    task_store: Literal["memory", "sqlite"] = "memory"
+    task_db_path: Path = Path("./.cortex/tasks.db")
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+    api_key: str | None = None
+    cors_origins: list[str] = ["*"]
     log_level: str = "INFO"
     otel_endpoint: str = "http://localhost:4317"
     max_agent_steps: int = 20
+    stream_tokens: bool = True
+    procedural_memory_enabled: bool = True
     plugins_dir: Path = Path("./src/cortex/tools/plugins")
     allowed_root: Path = Path(".")
     allowed_write_extensions: list[str] = [".txt", ".md", ".json", ".csv", ".py"]
     tool_timeout_seconds: float = 30.0
     code_exec_timeout_seconds: float = 10.0
+    code_sandbox: Literal["restricted", "container"] = "restricted"
+    code_sandbox_image: str = "python:3.12-slim"
+    code_sandbox_mem_limit: str = "256m"
+    code_sandbox_pids_limit: int = 128
+    code_sandbox_cpus: float = 0.5
     lats: LATSSettings = LATSSettings()
     supervisor: SupervisorSettings = SupervisorSettings()
     rate_limit: RateLimitSettings = RateLimitSettings()

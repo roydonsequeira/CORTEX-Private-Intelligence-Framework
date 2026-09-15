@@ -87,9 +87,9 @@ With the fixes above, yes, and fairly confidently. Reasoning:
 - [x] Fix the sandbox escape + regression test
 - [x] Remove dead Chroma container / compose warnings
 - [x] Document the real security model
-- [ ] Add `SECURITY.md` (how to report vulnerabilities privately)
-- [ ] Add `CHANGELOG.md` (start with v0.1.0)
-- [ ] Add a `CODE_OF_CONDUCT.md` (Contributor Covenant) — optional but expected
+- [x] Add `SECURITY.md` (how to report vulnerabilities privately)
+- [x] Add `CHANGELOG.md` (start with v0.1.0)
+- [x] Add a `CODE_OF_CONDUCT.md` (Contributor Covenant) — optional but expected
 - [ ] Squash/clean commit history is fine as-is; tag `v0.1.0` via a GitHub Release
 - [ ] Add real screenshots/GIF to replace the Jaeger placeholder in the README
 - [ ] Enable GitHub "Private vulnerability reporting" in repo settings

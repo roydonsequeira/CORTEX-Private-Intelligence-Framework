@@ -22,7 +22,7 @@ class TaskRequest(BaseModel):
 async def create_task(payload: TaskRequest, request: Request) -> dict[str, str]:
     """Queue an async agent task."""
     task_id = uuid.uuid4().hex
-    request.app.state.task_results[task_id] = {"task_id": task_id, "status": "queued"}
+    await request.app.state.task_store.set(task_id, {"task_id": task_id, "status": "queued"})
     await request.app.state.task_queue.put(
         {
             "task_id": task_id,
@@ -38,7 +38,7 @@ async def create_task(payload: TaskRequest, request: Request) -> dict[str, str]:
 @router.get("/{task_id}")
 async def get_task(task_id: str, request: Request) -> dict[str, Any]:
     """Return a task result or status."""
-    result = request.app.state.task_results.get(task_id)
+    result = await request.app.state.task_store.get(task_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Task not found.")
     return cast(dict[str, Any], result)

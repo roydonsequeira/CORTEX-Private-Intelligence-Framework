@@ -50,12 +50,15 @@ class LATSLoop:
         max_depth: int = 5,
         n_branches: int = 3,
         simulation_budget: int = 10,
+        evaluator: str = "model",
     ) -> None:
         self._kernel = kernel
         self._router = router
         self._max_depth = max_depth
         self._n_branches = n_branches
         self._simulation_budget = simulation_budget
+        self._evaluator = evaluator
+        self._eval_cache: dict[str, float] = {}
 
     async def run(self, task: str, session_id: str) -> "AgentState":
         """Run LATS and return the best terminal state discovered."""
@@ -123,6 +126,25 @@ class LATSLoop:
         return best
 
     async def _evaluate_state(self, state: "AgentState") -> float:
+        """Score an AgentState in [0, 1], caching by state and honouring the evaluator.
+
+        Evaluations are expensive when they use the LLM, and the tree revisits
+        equivalent states, so results are memoised by (status, final answer). The
+        ``heuristic`` evaluator skips the model entirely for a cheap, deterministic
+        score — useful for fast local runs and tests.
+        """
+        cache_key = f"{state.status}|{state.final_answer or ''}"
+        cached = self._eval_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        if self._evaluator == "heuristic":
+            value = _heuristic_score(state)
+        else:
+            value = await self._model_score(state)
+        self._eval_cache[cache_key] = value
+        return value
+
+    async def _model_score(self, state: "AgentState") -> float:
         """Score an AgentState in [0, 1] using the REASONING model."""
         prompt = (
             "Score this agent state from 0.0 to 1.0 as JSON with keys "
@@ -250,3 +272,18 @@ class LATSLoop:
                 current_id = node.parent_id
                 depth += 1
             span.set_attribute("lats.backprop_depth", depth)
+
+
+def _heuristic_score(state: "AgentState") -> float:
+    """Cheap, model-free value estimate for an AgentState in [0, 1].
+
+    A complete state with an answer scores highest; a state that has produced
+    some answer but is not complete scores partially; everything else scores 0.
+    """
+    if state.status == "complete" and state.final_answer:
+        return 1.0
+    if state.status == "failed":
+        return 0.0
+    if state.final_answer:
+        return 0.5
+    return 0.0
