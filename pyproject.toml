@@ -74,3 +74,6 @@ mypy_path = "src"
 [[tool.mypy.overrides]]
 module = ["RestrictedPython", "RestrictedPython.*", "docker", "docker.*"]
 ignore_missing_imports = true
+# RestrictedPython 8.5+ ships inline types but does not list re-exports in
+# __all__; treat its imported names as re-exported so strict mode accepts them.
+implicit_reexport = true
