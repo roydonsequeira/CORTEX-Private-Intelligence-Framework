@@ -23,14 +23,6 @@ class ModelCapability(StrEnum):
     CODE = "CODE"
 
 
-_DEFAULT_ROUTING: dict[ModelCapability, str] = {
-    ModelCapability.REASONING: "deepseek-r1:8b",
-    ModelCapability.FAST: "llama3.1:8b",
-    ModelCapability.EMBEDDING: "nomic-embed-text",
-    ModelCapability.CODE: "qwen2.5-coder:7b",
-}
-
-
 class ModelRouter:
     """Routes model requests to the appropriate Ollama model by capability."""
 
@@ -43,9 +35,10 @@ class ModelRouter:
         self._provider = provider
         self._settings = settings
         self._routing = routing or {
-            **_DEFAULT_ROUTING,
+            ModelCapability.REASONING: settings.reasoning_model,
             ModelCapability.FAST: settings.ollama_model,
             ModelCapability.EMBEDDING: settings.embed_model,
+            ModelCapability.CODE: settings.code_model,
         }
 
     def route(self, capability: ModelCapability) -> str:

@@ -1,4 +1,4 @@
-.PHONY: up dev pull-models test lint clean
+.PHONY: up dev demo pull-models pull-models-demo test lint clean
 
 up:
 	docker compose -f infra/docker-compose.yml up -d
@@ -6,8 +6,14 @@ up:
 dev:
 	docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up
 
+demo:
+	docker compose -f infra/docker-compose.demo.yml up -d
+
 pull-models:
 	bash infra/ollama/pull_models.sh
+
+pull-models-demo:
+	bash infra/ollama/pull_models_demo.sh
 
 test:
 	pytest tests/ -v

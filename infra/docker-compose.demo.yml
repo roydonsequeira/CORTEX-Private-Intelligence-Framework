@@ -1,0 +1,72 @@
+# Low-resource demo stack: CPU-only Ollama with a tiny model, for laptops and
+# quick live demos where no GPU is available. Self-contained (do NOT layer it on
+# docker-compose.yml) so the base file's GPU reservation never applies.
+#
+#   docker compose -f infra/docker-compose.demo.yml up -d
+#   make pull-models-demo        # pulls the tiny models
+#
+# Answers are weaker than the full 8B stack — this shows the machinery (planning,
+# streaming, tool calls, memory, tracing), not frontier-model quality.
+networks:
+  cortex-net:
+    driver: bridge
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama_data:/root/.ollama
+    networks:
+      - cortex-net
+    # No GPU reservation: runs on CPU.
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+    networks:
+      - cortex-net
+
+  cortex-api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - CORTEX_OLLAMA_BASE_URL=http://ollama:11434
+      # Point every model capability at one tiny CPU-friendly model.
+      - CORTEX_OLLAMA_MODEL=llama3.2:1b
+      - CORTEX_REASONING_MODEL=llama3.2:1b
+      - CORTEX_CODE_MODEL=llama3.2:1b
+      - CORTEX_EMBED_MODEL=nomic-embed-text
+      - CORTEX_CHROMA_PATH=/app/.cortex/chroma
+      - CORTEX_DB_PATH=/app/.cortex/cortex.db
+      - CORTEX_OTEL_ENDPOINT=http://jaeger:4317
+    depends_on:
+      - ollama
+      - jaeger
+    networks:
+      - cortex-net
+    volumes:
+      - cortex_data:/app/.cortex
+
+  ui:
+    build:
+      context: ../ui
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_CORTEX_API_URL=http://localhost:8000
+      - CORTEX_API_URL=http://cortex-api:8000
+    depends_on:
+      - cortex-api
+    networks:
+      - cortex-net
+
+volumes:
+  cortex_data:
