@@ -4,6 +4,19 @@ All notable changes to CORTEX are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Configurable `reasoning_model` and `code_model` settings, so every model
+  capability (REASONING / FAST / CODE / EMBEDDING) is routed from config. This
+  makes it possible to point the whole agent at a single small model.
+- A low-resource, CPU-only demo stack (`infra/docker-compose.demo.yml`,
+  `make demo` / `make pull-models-demo`) that runs on `llama3.2:1b` for laptops
+  and quick live demos without a GPU.
+- README architecture diagram (Mermaid), a Demo section with a GIF slot, and a
+  demo recording guide (`docs/DEMO_RECORDING.md`).
+
 ## [1.0.0] - 2026-09-11
 
 ### Added

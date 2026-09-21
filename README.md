@@ -14,38 +14,41 @@ Cloud AI is powerful, but everything you send to it can be logged, retained, ins
 
 CORTEX is a fully local, privacy-first AI agent framework that runs on your own hardware. It combines Ollama models, a production FastAPI runtime, a Next.js operator UI, four-tier memory, sandboxed tools, LATS reasoning, supervisor-worker orchestration, and OpenTelemetry observability without requiring cloud API keys.
 
+## Demo
+
+<!--
+  Record a ~3-minute local walkthrough (see docs/DEMO_RECORDING.md), save it as
+  docs/assets/demo.gif, then uncomment the line below to embed it here:
+-->
+<!-- ![CORTEX live demo](docs/assets/demo.gif) -->
+
+A 3-minute local walkthrough — live token streaming, a sandboxed `python_exec` tool call, cross-session memory, and the request trace in Jaeger. Recording steps: [docs/DEMO_RECORDING.md](docs/DEMO_RECORDING.md).
+
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           CORTEX Runtime                                     │
-│                                                                               │
-│  ┌──────────────┐     ┌────────────────────────────────────────────────┐    │
-│  │   Next.js UI │────▶│              FastAPI Gateway                    │    │
-│  │  (Port 3000) │     │  /chat  /tasks  /memory  /tools  /health       │    │
-│  └──────────────┘     └────────────────┬───────────────────────────────┘    │
-│                                        │                                      │
-│                        ┌──────────────▼──────────────┐                      │
-│                        │        Agent Kernel          │                      │
-│                        │  Planner · Executor · Reflector                    │
-│                        │  ReAct · LATS · Supervisor                         │
-│                        └──────────────┬──────────────┘                      │
-│           ┌───────────────────────────┼───────────────────────────┐         │
-│   ┌───────▼──────┐         ┌──────────▼─────────┐      ┌─────────▼──────┐  │
-│   │ Memory Stack │         │   Tool Registry     │      │  Model Router  │  │
-│   │ Working      │         │ Filesystem          │      │ Ollama         │  │
-│   │ Episodic     │         │ Python sandbox      │      │ llama3.1:8b    │  │
-│   │ Semantic     │         │ Web fetch           │      │ deepseek-r1    │  │
-│   │ Procedural   │         │ Document search     │      │ nomic-embed    │  │
-│   └──────┬───────┘         │ Plugin loader       │      └────────────────┘  │
-│          │                 └─────────────────────┘                          │
-│   ┌──────▼───────┐                                                            │
-│   │ Local stores │ SQLite episodes · Chroma vectors                           │
-│   └──────────────┘                                                            │
-│   ┌───────────────────────────────────────────────────────────────────────┐  │
-│   │ OpenTelemetry → OTLP gRPC → Jaeger UI (http://localhost:16686)        │  │
-│   └───────────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    UI["Next.js Operator UI<br/>live SSE streaming"] -->|HTTP · SSE| API["FastAPI Gateway<br/>/chat · /tasks · /memory · /tools · /health"]
+    API --> Kernel["Agent Kernel<br/>Planner · Executor (ReAct) · Reflector"]
+    Kernel -. hard tasks .-> LATS["LATS<br/>tree search"]
+    Kernel -. complex jobs .-> SUP["Supervisor–worker<br/>parallel agents"]
+
+    Kernel --> Mem["Memory Stack"]
+    Kernel --> Tools["Tool Registry"]
+    Kernel --> Router["Model Router"]
+
+    Mem --> Working["Working"]
+    Mem --> Episodic["Episodic · SQLite"]
+    Mem --> Semantic["Semantic · ChromaDB"]
+    Mem --> Procedural["Procedural · ChromaDB"]
+
+    Tools --> PyExec["python_exec<br/>sandboxed"]
+    Tools --> FS["filesystem"]
+    Tools --> Web["web_fetch"]
+    Tools --> Doc["doc_search"]
+
+    Router --> Ollama["Ollama<br/>llama3.1 · deepseek-r1 · nomic-embed"]
+    API -. OTLP spans .-> Jaeger["Jaeger traces<br/>:16686"]
 ```
 
 ## Features
@@ -74,6 +77,17 @@ Open:
 - API docs: http://localhost:8000/docs
 - Jaeger traces: http://localhost:16686
 
+### Low-resource demo (no GPU)
+
+For a laptop or quick live demo without a GPU, use the CPU-only stack, which points every model capability at a small model (`llama3.2:1b`):
+
+```bash
+make demo
+make pull-models-demo
+```
+
+Same URLs as above. Answers are weaker than the full 8B stack — this shows the machinery (planning, streaming, tool calls, memory, tracing), not frontier-model quality. Warm the model with one query before presenting, since the first call loads it.
+
 ## Configuration
 
 All runtime configuration lives in `cortex.yaml` and can be overridden with `CORTEX_` environment variables. CORTEX finds `cortex.yaml` by walking up from the current working directory, so it works from any subdirectory; set `CORTEX_CONFIG` to point at an explicit config file.
@@ -81,7 +95,9 @@ All runtime configuration lives in `cortex.yaml` and can be overridden with `COR
 | Key | Default | Description |
 |---|---|---|
 | `ollama_base_url` | `http://localhost:11434` | Ollama server URL |
-| `ollama_model` | `llama3.1:8b` | Default fast model |
+| `ollama_model` | `llama3.1:8b` | Fast model (FAST capability) |
+| `reasoning_model` | `deepseek-r1:8b` | Planner / LATS model (REASONING capability) |
+| `code_model` | `qwen2.5-coder:7b` | Code model (CODE capability) |
 | `embed_model` | `nomic-embed-text` | Embedding model |
 | `chroma_path` | `./.cortex/chroma` | Local Chroma persistence path |
 | `db_path` | `./.cortex/cortex.db` | SQLite episodic memory path |
