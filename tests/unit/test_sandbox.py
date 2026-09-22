@@ -60,6 +60,41 @@ async def test_restricted_sandbox_runs_iterative_fibonacci() -> None:
     assert "4181" in result.output
 
 
+@pytest.mark.asyncio
+async def test_restricted_sandbox_allows_safe_imports() -> None:
+    """Common pure-computation modules can be imported (LLMs write `import math`)."""
+    result = await RestrictedSandbox().run(
+        "import math\nprint(math.comb(20, 2))", timeout_seconds=5.0
+    )
+    assert result.success is True
+    assert "190" in result.output
+
+    from_import = await RestrictedSandbox().run(
+        "from math import factorial\nprint(factorial(5))", timeout_seconds=5.0
+    )
+    assert from_import.success is True
+    assert "120" in from_import.output
+
+
+@pytest.mark.asyncio
+async def test_restricted_sandbox_blocks_unsafe_imports() -> None:
+    """Importing os/sys/subprocess is refused even with imports enabled."""
+    for module in ("os", "sys", "subprocess"):
+        result = await RestrictedSandbox().run(f"import {module}", timeout_seconds=5.0)
+        assert result.success is False
+        assert "not permitted" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_restricted_sandbox_import_does_not_reopen_escape() -> None:
+    """An imported safe module cannot be traversed into a forbidden module."""
+    result = await RestrictedSandbox().run(
+        "import uuid\nprint(uuid.os.getcwd())", timeout_seconds=5.0
+    )
+    assert result.success is False
+    assert "getcwd" not in result.output
+
+
 def _fake_docker_client(exit_code: int, logs: bytes) -> tuple[Any, MagicMock]:
     """Return a fake docker client and the container mock it produces."""
     container = MagicMock()

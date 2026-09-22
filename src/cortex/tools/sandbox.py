@@ -17,6 +17,7 @@ backend via Pyodide/wasmtime is a planned third option.)
 
 import base64
 import contextlib
+import importlib
 import io
 import json
 import math
@@ -222,6 +223,44 @@ def _run_code(code: str) -> str:
     return "\n".join(parts).strip()
 
 
+# Pure-computation stdlib modules the sandbox permits `import` for. None of these
+# expose the filesystem, network, subprocess, or interpreter internals, and the
+# attribute guard still blocks any traversal from them into other modules — so
+# `import os` stays blocked and the json -> codecs -> sys -> os escape still fails.
+_SAFE_MODULES = frozenset(
+    {
+        "math", "cmath", "statistics", "random", "decimal", "fractions",
+        "json", "datetime", "itertools", "functools", "operator", "re",
+        "string", "textwrap", "collections", "heapq", "bisect", "calendar",
+        "uuid", "hashlib", "base64", "unicodedata", "typing", "enum", "dataclasses",
+    }
+)
+
+
+def _safe_import(
+    name: str,
+    _globals: Any = None,
+    _locals: Any = None,
+    fromlist: tuple[str, ...] = (),
+    level: int = 0,
+) -> Any:
+    """A restricted ``__import__`` allowing only a whitelist of safe stdlib modules.
+
+    LLM-generated code routinely writes ``import math`` / ``import json``; without
+    this, every such snippet fails with "__import__ not found". Only pure-
+    computation modules in ``_SAFE_MODULES`` are permitted; anything else (os, sys,
+    subprocess, socket, …) raises ImportError.
+    """
+    if level != 0:
+        raise ImportError("relative imports are not permitted in the sandbox")
+    root = name.split(".")[0]
+    if root not in _SAFE_MODULES:
+        raise ImportError(f"import of '{name}' is not permitted in the sandbox")
+    module = importlib.import_module(name)
+    # Match __import__ semantics: bare `import a.b` binds the top package `a`.
+    return module if fromlist else importlib.import_module(root)
+
+
 def _guarded_getattr(obj: object, name: str, default: Any = None) -> Any:
     """Attribute guard: block dunders and any access that yields a module object.
 
@@ -243,6 +282,7 @@ def _safe_globals() -> dict[str, Any]:
     builtins = dict(safe_builtins)
     builtins.update(
         {
+            "__import__": _safe_import,
             "len": len,
             "range": range,
             "enumerate": enumerate,
@@ -252,7 +292,22 @@ def _safe_globals() -> dict[str, Any]:
             "list": list,
             "dict": dict,
             "set": set,
+            "tuple": tuple,
             "bool": bool,
+            "abs": abs,
+            "min": min,
+            "max": max,
+            "sum": sum,
+            "round": round,
+            "sorted": sorted,
+            "reversed": reversed,
+            "zip": zip,
+            "map": map,
+            "filter": filter,
+            "all": all,
+            "any": any,
+            "divmod": divmod,
+            "pow": pow,
         }
     )
     return {
