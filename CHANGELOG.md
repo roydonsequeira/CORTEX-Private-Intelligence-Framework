@@ -8,6 +8,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `telemetry_enabled` setting (default on). Set it `false` (e.g.
+  `CORTEX_TELEMETRY_ENABLED=false`) to run without an OpenTelemetry collector:
+  the trace/metric exporters are skipped entirely, so a local no-Docker run is
+  free of repeated "connection refused" export warnings.
 - Configurable `reasoning_model` and `code_model` settings, so every model
   capability (REASONING / FAST / CODE / EMBEDDING) is routed from config. This
   makes it possible to point the whole agent at a single small model.

@@ -73,8 +73,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Initialize singleton runtime services for the process."""
     settings = get_settings()
     configure_logging(settings.log_level)
-    setup_tracing("cortex-api", settings.otel_endpoint)
-    setup_metrics(settings.otel_endpoint)
+    setup_tracing("cortex-api", settings.otel_endpoint, enabled=settings.telemetry_enabled)
+    setup_metrics(settings.otel_endpoint if settings.telemetry_enabled else None)
 
     provider = OllamaProvider(settings.ollama_base_url)
     if not await provider.health_check():
