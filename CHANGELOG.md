@@ -6,6 +6,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Code sandbox now runs ordinary Python that defines a function and calls it, and
+  code that uses tuple unpacking. `_run_code` used separate globals/locals dicts
+  (so `def f(): ...; f()` raised `name 'f' is not defined`), and the
+  `_unpack_sequence_` guard was missing (so `a, b = 1, 2` raised
+  `name '_unpack_sequence_' is not defined`). The worker also now reports any
+  error from untrusted code as a failed result instead of crashing with a
+  traceback. Security guards (module-traversal escape, imports) are unchanged.
+
 ### Added
 
 - `telemetry_enabled` setting (default on). Set it `false` (e.g.

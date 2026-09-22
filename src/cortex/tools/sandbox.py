@@ -29,7 +29,11 @@ from typing import Any
 from pydantic import BaseModel
 from RestrictedPython import compile_restricted
 from RestrictedPython.Eval import default_guarded_getitem
-from RestrictedPython.Guards import guarded_iter_unpack_sequence, safe_builtins
+from RestrictedPython.Guards import (
+    guarded_iter_unpack_sequence,
+    guarded_unpack_sequence,
+    safe_builtins,
+)
 from RestrictedPython.PrintCollector import PrintCollector
 
 from cortex.config.settings import Settings
@@ -189,22 +193,29 @@ def _sandbox_worker(code: str, queue: Any) -> None:
     """Execute restricted code in an isolated worker process."""
     try:
         queue.put((True, _run_code(code), None))
-    except (SyntaxError, NameError, TypeError, ValueError, ImportError) as exc:
-        queue.put((False, "", str(exc)))
+    except Exception as exc:
+        # All errors from untrusted code (including RestrictedPython guard
+        # violations, which raise AttributeError) are reported as a failed
+        # result rather than crashing the worker with a traceback.
+        queue.put((False, "", f"{type(exc).__name__}: {exc}"))
 
 
 def _run_code(code: str) -> str:
-    """Run RestrictedPython code and return collected output."""
+    """Run RestrictedPython code and return collected output.
+
+    A single namespace is used for globals and locals so that a top-level
+    function definition is visible when the same snippet calls it (with separate
+    dicts, ``def f(): ...`` then ``f()`` raises "name 'f' is not defined").
+    """
     byte_code = compile_restricted(code, "<cortex-python-exec>", "exec")
-    globals_dict = _safe_globals()
-    locals_dict: dict[str, Any] = {}
+    namespace = _safe_globals()
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):
-        exec(byte_code, globals_dict, locals_dict)  # noqa: S102
-    printed = locals_dict.get("_print") or globals_dict.get("_print")
+        exec(byte_code, namespace)  # noqa: S102
+    printed = namespace.get("_print")
     collected = printed() if callable(printed) else ""
     direct_stdout = stdout.getvalue()
-    result = locals_dict.get("_")
+    result = namespace.get("_")
     parts = [part for part in (direct_stdout, collected) if part]
     if result is not None:
         parts.append(result if isinstance(result, str) else repr(result))
@@ -251,6 +262,7 @@ def _safe_globals() -> dict[str, Any]:
         "_getitem_": default_guarded_getitem,
         "_getiter_": iter,
         "_iter_unpack_sequence_": guarded_iter_unpack_sequence,
+        "_unpack_sequence_": guarded_unpack_sequence,
         "json": json,
         "math": math,
         "datetime": datetime,
