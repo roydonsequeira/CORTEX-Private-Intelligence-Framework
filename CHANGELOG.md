@@ -14,7 +14,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `_unpack_sequence_` guard was missing (so `a, b = 1, 2` raised
   `name '_unpack_sequence_' is not defined`). The worker also now reports any
   error from untrusted code as a failed result instead of crashing with a
-  traceback. Security guards (module-traversal escape, imports) are unchanged.
+  traceback.
+- Code sandbox now permits `import` of a whitelist of pure-computation stdlib
+  modules (math, json, random, statistics, itertools, …). LLM-generated code
+  routinely writes `import math`, which previously always failed with
+  "__import__ not found". Unsafe modules (os, sys, subprocess, …) stay blocked,
+  and the attribute guard still prevents traversing an imported module into a
+  forbidden one, so the escape and import-blocking regression tests are unchanged.
+- Planner and executor prompts now push for the shortest plan (often one step)
+  and stopping as soon as the answer is in hand, so small local models stop
+  over-decomposing simple tasks into repetitive steps.
 
 ### Added
 
