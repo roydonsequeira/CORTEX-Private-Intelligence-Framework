@@ -12,16 +12,24 @@ logger = structlog.get_logger(__name__)
 _tracer_provider: TracerProvider | None = None
 
 
-def setup_tracing(service_name: str, otel_endpoint: str) -> None:
-    """Initialise OTel SDK with OTLP gRPC exporter. Silently continues if unreachable."""
+def setup_tracing(service_name: str, otel_endpoint: str, enabled: bool = True) -> None:
+    """Initialise OTel SDK with OTLP gRPC exporter.
+
+    When ``enabled`` is False (or no endpoint is given) the span exporter is not
+    attached, so spans are created but never exported and no connection to the
+    collector is attempted — keeping a local, no-collector run free of the
+    repeated "connection refused" export warnings. Silently continues if the
+    exporter cannot be initialised.
+    """
     global _tracer_provider
     resource = Resource.create({"service.name": service_name})
     provider = TracerProvider(resource=resource)
-    try:
-        exporter = OTLPSpanExporter(endpoint=otel_endpoint, insecure=True)
-        provider.add_span_processor(BatchSpanProcessor(exporter))
-    except Exception as exc:
-        logger.warning("otel_exporter_init_failed", endpoint=otel_endpoint, error=str(exc))
+    if enabled and otel_endpoint:
+        try:
+            exporter = OTLPSpanExporter(endpoint=otel_endpoint, insecure=True)
+            provider.add_span_processor(BatchSpanProcessor(exporter))
+        except Exception as exc:
+            logger.warning("otel_exporter_init_failed", endpoint=otel_endpoint, error=str(exc))
     trace.set_tracer_provider(provider)
     _tracer_provider = provider
 

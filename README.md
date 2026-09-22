@@ -88,6 +88,13 @@ make pull-models-demo
 
 Same URLs as above. Answers are weaker than the full 8B stack — this shows the machinery (planning, streaming, tool calls, memory, tracing), not frontier-model quality. Warm the model with one query before presenting, since the first call loads it.
 
+Running the API **natively without Docker** (no Jaeger collector)? Set `CORTEX_TELEMETRY_ENABLED=false` to skip trace/metric export so the terminal stays free of "connection refused" export warnings:
+
+```bash
+uvicorn cortex.api.server:create_app --factory --port 8000
+```
+(with `CORTEX_TELEMETRY_ENABLED=false` in the environment).
+
 ## Configuration
 
 All runtime configuration lives in `cortex.yaml` and can be overridden with `CORTEX_` environment variables. CORTEX finds `cortex.yaml` by walking up from the current working directory, so it works from any subdirectory; set `CORTEX_CONFIG` to point at an explicit config file.
@@ -106,6 +113,7 @@ All runtime configuration lives in `cortex.yaml` and can be overridden with `COR
 | `cors_origins` | `["*"]` | Allowed CORS origins; narrow this before exposing the API |
 | `task_store` | `memory` | Task result backend: `memory` (lost on restart) or `sqlite` (durable) |
 | `task_db_path` | `./.cortex/tasks.db` | SQLite path for the durable task store |
+| `telemetry_enabled` | `true` | Export OpenTelemetry traces/metrics; set `false` to run without a collector (no Jaeger) and no export warnings |
 | `otel_endpoint` | `http://localhost:4317` | OTLP gRPC endpoint |
 | `max_agent_steps` | `20` | ReAct loop budget |
 | `code_sandbox` | `restricted` | Code execution backend: `restricted` (in-process) or `container` (Docker isolation) |

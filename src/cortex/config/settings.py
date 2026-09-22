@@ -100,6 +100,7 @@ class Settings(BaseSettings):
     api_key: str | None = None
     cors_origins: list[str] = ["*"]
     log_level: str = "INFO"
+    telemetry_enabled: bool = True
     otel_endpoint: str = "http://localhost:4317"
     max_agent_steps: int = 20
     stream_tokens: bool = True
