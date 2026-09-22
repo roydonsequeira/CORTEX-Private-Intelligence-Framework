@@ -3,12 +3,25 @@
 @tailwind utilities;
 
 :root {
-  --background: #0a0a0f;
-  --surface: #111118;
-  --border: #1e1e2e;
-  --accent: #7c3aed;
-  --text-primary: #e2e8f0;
-  --text-muted: #64748b;
+  /* Deep-ink instrument palette — a private machine that is quietly alive. */
+  --ground: #0b0e14;
+  --panel: #10151f;
+  --raised: #161d2a;
+  --line: #232c3b;
+  --ink: #e8ecf4;
+  --ink-dim: #98a2b6;
+  --ink-faint: #5a6576;
+  --signal: #34e1c4; /* the one bold thing: "live & local" */
+  --ok: #56d07e;
+  --bad: #fb6e7e;
+  --think: #e4b667;
+  --tool: #6ba8f5;
+
+  /* System stacks only — no network font fetch (works behind proxies/offline). */
+  --font-sans: "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial,
+    sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Menlo,
+    Consolas, monospace;
 }
 
 * {
@@ -18,44 +31,145 @@
 html,
 body {
   min-height: 100%;
-  background: var(--background);
-  color: var(--text-primary);
+  background: var(--ground);
+  color: var(--ink);
 }
 
 body {
   margin: 0;
   overflow: hidden;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 ::selection {
-  background: rgba(124, 58, 237, 0.35);
+  background: rgba(52, 225, 196, 0.28);
+  color: var(--ink);
 }
 
-@keyframes pulse-dot {
+/* Thin, unobtrusive scrollbars that match the console. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #303c50;
+  background-clip: padding-box;
+}
+
+/* Streaming caret — a solid block that blinks while tokens arrive. */
+@keyframes caret {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+.caret {
+  display: inline-block;
+  width: 0.5ch;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--signal);
+  animation: caret 1s steps(1) infinite;
+}
+
+/* Live pulse — marks the step the agent is on right now. */
+@keyframes livepulse {
   0%,
   100% {
-    opacity: 0.35;
-    transform: scale(0.85);
+    box-shadow: 0 0 0 0 rgba(52, 225, 196, 0.5);
   }
   50% {
+    box-shadow: 0 0 0 4px rgba(52, 225, 196, 0);
+  }
+}
+.live {
+  animation: livepulse 1.6s ease-out infinite;
+}
+
+/* New events settle in once — motion that shows what changed, not decoration. */
+@keyframes settle {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
     opacity: 1;
-    transform: scale(1);
+    transform: none;
+  }
+}
+.settle {
+  animation: settle 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .caret,
+  .live,
+  .settle {
+    animation: none;
   }
 }
 
-@keyframes tool-flash {
-  0% {
-    border-color: rgba(124, 58, 237, 0.9);
-  }
-  100% {
-    border-color: var(--border);
-  }
+/* Markdown answer body: readable prose inside the console. */
+.answer :where(p, ul, ol, pre, blockquote) {
+  margin: 0.6em 0;
 }
-
-.thinking-dot {
-  animation: pulse-dot 1.2s ease-out infinite;
+.answer :where(p, ul, ol):first-child {
+  margin-top: 0;
 }
-
-.tool-flash {
-  animation: tool-flash 150ms ease-out;
+.answer :where(p, ul, ol, pre):last-child {
+  margin-bottom: 0;
+}
+.answer :where(h1, h2, h3) {
+  font-weight: 600;
+  margin: 0.8em 0 0.4em;
+  line-height: 1.25;
+}
+.answer code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 0.1em 0.35em;
+  border-radius: 5px;
+}
+.answer pre {
+  background: var(--ground);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.85rem;
+  overflow-x: auto;
+  font-size: 0.82rem;
+}
+.answer pre code {
+  background: none;
+  padding: 0;
+}
+.answer a {
+  color: var(--signal);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.answer ul {
+  list-style: disc;
+  padding-left: 1.25rem;
+}
+.answer ol {
+  list-style: decimal;
+  padding-left: 1.25rem;
 }
