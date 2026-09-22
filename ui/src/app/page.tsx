@@ -8,21 +8,26 @@ import { useAgentStream } from "@/lib/streaming";
 import type { ModelCapability } from "@/lib/types";
 
 export default function Home() {
-  const { events, isStreaming, error, sessionId, sendMessage } = useAgentStream(null);
+  const { events, isStreaming, sessionId, sendMessage } = useAgentStream(null);
 
   function submit(message: string, capability: ModelCapability) {
     void sendMessage(message, capability);
   }
 
+  function runExample(prompt: string) {
+    if (!isStreaming) {
+      void sendMessage(prompt, "FAST");
+    }
+  }
+
   return (
-    <div className="flex h-screen bg-background text-primary">
+    <div className="flex h-screen bg-ground text-ink">
       <MemoryPanel sessionId={sessionId} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <AgentOutput events={events} isStreaming={isStreaming} />
-        {error ? <div className="border-l-4 border-red-500 bg-red-950/40 px-4 py-2 text-sm text-red-200">{error}</div> : null}
+        <AgentOutput events={events} isStreaming={isStreaming} onRun={runExample} />
         <ChatInput disabled={isStreaming} onSubmit={submit} />
       </div>
-      <ExecutionTrace events={events} />
+      <ExecutionTrace events={events} isStreaming={isStreaming} />
     </div>
   );
 }
