@@ -1,4 +1,4 @@
-# CORTEX — Private Intelligence Framework
+# CORTEX — Private Intelligence Framework 
 
 > "Intelligence that stays yours."
 
