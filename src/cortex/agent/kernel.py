@@ -638,7 +638,9 @@ _TOOL_INTENT = {
         r"|\.(txt|md|json|csv|py|yaml|yml|log)\b",
         re.IGNORECASE,
     ),
-    "python_exec": re.compile(r"\b(python|run|execute|code|script)\b", re.IGNORECASE),
+    "python_exec": re.compile(
+        r"\b(python|run|execute|code|script)\b|\btest (it|this|that)\b", re.IGNORECASE
+    ),
     "calculator": re.compile(r"\b(calculate|calculator|compute)\b", re.IGNORECASE),
     # "According to the README, ..." answered "based on the README" without reading it.
     "doc_search": re.compile(

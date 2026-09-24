@@ -35,6 +35,14 @@ _NON_FACT = re.compile(
     re.IGNORECASE,
 )
 _ABOUT_USER = re.compile(r"\buser\b", re.IGNORECASE)
+# Consolidate only turns where the user says something about themselves.
+# Seen: "parse this JSON and give me the name: {"name": "Ada"}" stored
+# "The user's name is Ada", which then overrode the real name at recall.
+_SELF_STATEMENT = re.compile(
+    r"\b(my|mine|i am|i[’']m|i live|i work|i study|i prefer|i like|i love|i hate|"
+    r"i use|i have|i[’']ve|i was|i will|i[’']ll|i want|i need|call me|remember)\b",
+    re.IGNORECASE,
+)
 _CONSOLIDATION_PROMPT = (
     "You maintain long-term memory about the USER for a personal AI assistant. "
     "From this exchange, extract at most 3 durable facts about the user — their "
@@ -131,6 +139,9 @@ class SemanticMemory(BaseMemory):
         user_text = " ".join(m.content for m in dialogue if m.role == "user")
         if len(user_text.strip()) < _MIN_CONSOLIDATION_CHARS:
             return  # greetings and one-word turns carry nothing worth remembering
+        latest = next((m.content for m in reversed(dialogue) if m.role == "user"), "")
+        if not _SELF_STATEMENT.search(latest):
+            return  # nothing the user said about themselves; also saves a model call
 
         transcript = "\n".join(f"{m.role}: {m.content[:2000]}" for m in dialogue)
         messages = [
