@@ -214,8 +214,8 @@ class AgentKernel:
             if allow_tools
             else []
         )
-        # Each way of recovering a skipped planned tool is tried at most once.
-        recoveries_left = {"run_code", "nudge"}
+        # Each recovery (skipped planned tool, promised-but-missing retry) runs once.
+        recoveries_left = {"run_code", "nudge", "retry"}
 
         while (
             state.status not in ("complete", "failed")
@@ -257,6 +257,17 @@ class AgentKernel:
                 if state.status == "complete" and skipped
                 else None
             )
+            if (
+                state.status == "complete"
+                and state.tool_results
+                and not state.tool_results[-1].success
+                and "retry" in recoveries_left
+                and _PROMISED_RETRY.search(state.final_answer or "")
+            ):
+                # "Let's try running the code again" — and the turn ended there.
+                recoveries_left.discard("retry")
+                await self._retry_failed_tool(state, state.tool_results[-1], event_queue)
+                continue
             if skipped and recovery:
                 # The plan needs a tool the user asked for, but the model answered
                 # without it (seen: "I have saved x to notes.txt" with no write; a
@@ -334,6 +345,32 @@ class AgentKernel:
                 content=(
                     f"Use the {tool} tool now to do what I asked. Do not answer until "
                     "you have its result."
+                ),
+            )
+        )
+
+    async def _retry_failed_tool(
+        self,
+        state: AgentState,
+        failed: ToolResult,
+        event_queue: asyncio.Queue[dict[str, Any]] | None,
+    ) -> None:
+        """Replace "let's try again" (with no retry) by an instruction to retry now."""
+        logger.info("promised_retry_nudge", session_id=state.session_id, tool=failed.tool_name)
+        if state.messages and state.messages[-1].role == "assistant":
+            state.messages.pop()
+        if state.streamed_final:
+            await self._emit(event_queue, {"type": "token_reset"})
+        state.final_answer = None
+        state.streamed_final = False
+        state.status = "executing"
+        state.messages.append(
+            Message(
+                role="user",
+                content=(
+                    f"The {failed.tool_name} call failed: {(failed.error or '')[:300]} "
+                    f"Fix the problem and call {failed.tool_name} again now, instead of "
+                    "describing what you will do."
                 ),
             )
         )
@@ -597,13 +634,16 @@ def _is_tool_free_plan(plan: list[str]) -> bool:
 # Words in the user's own request that show they want a particular tool used.
 _TOOL_INTENT = {
     "filesystem": re.compile(
-        r"\b(file|files|folder|directory|save|write|read|create)\b"
+        r"\b(file|files|folder|directory|save|write|read|create|readme|according to)\b"
         r"|\.(txt|md|json|csv|py|yaml|yml|log)\b",
         re.IGNORECASE,
     ),
     "python_exec": re.compile(r"\b(python|run|execute|code|script)\b", re.IGNORECASE),
     "calculator": re.compile(r"\b(calculate|calculator|compute)\b", re.IGNORECASE),
-    "doc_search": re.compile(r"\b(index|indexed|documents?|search)\b", re.IGNORECASE),
+    # "According to the README, ..." answered "based on the README" without reading it.
+    "doc_search": re.compile(
+        r"\b(index|indexed|documents?|search|readme|docs|according to)\b", re.IGNORECASE
+    ),
     "web_fetch": re.compile(
         r"https?://|www\.|\b(fetch|url|website|web ?page|online|internet|browse)\b",
         re.IGNORECASE,
@@ -657,6 +697,15 @@ _PYTHON_BLOCK = re.compile(r"```(?:python|py)[ \t]*\n(.*?)```", re.DOTALL | re.I
 def _python_code(answer: str) -> str:
     """The Python code blocks of an answer, joined; empty if there are none."""
     return "\n\n".join(block.strip() for block in _PYTHON_BLOCK.findall(answer)).strip()
+
+
+# An answer that announces a retry instead of doing it ("Let's try running the
+# code again.", "Let me fix that and run it").
+_PROMISED_RETRY = re.compile(
+    r"\b(let[’']?s|let me|i[’']?ll|i will|i am going to|i[’']?m going to)\s+"
+    r"(\w+\s+){0,3}(try|run|re-?run|fix|correct|execute|attempt)\b",
+    re.IGNORECASE,
+)
 
 
 def _next_recovery(tool: str, answer: str, available: set[str]) -> str | None:

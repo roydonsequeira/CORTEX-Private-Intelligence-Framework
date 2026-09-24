@@ -429,3 +429,12 @@ async def test_filesystem_without_action_reads_the_file(tmp_path: Path) -> None:
     result = await registry.execute("filesystem", path="a.txt")
     assert result.success is True
     assert result.output == "hello"
+
+
+@pytest.mark.asyncio
+async def test_python_exec_repairs_escaped_quotes() -> None:
+    """name = \\"Roydon\\" (escaped quotes, escaped newlines) still runs."""
+    code = 'name = \\"Roydon\\"' + "\n" + "print(name[::-1])"
+    result = await CodeExecutionTool().execute(code=code)
+    assert result.success is True
+    assert result.output == "nodyoR"

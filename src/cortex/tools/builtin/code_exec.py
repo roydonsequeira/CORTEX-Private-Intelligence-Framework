@@ -63,25 +63,29 @@ class CodeExecutionTool(BaseTool):
 
 
 def _repair_escaped_newlines(code: str) -> str:
-    """Undo double-escaped newlines that small models put in tool-call JSON.
+    """Undo double escaping that small models put in tool-call JSON.
 
-    Seen: a function sent with a literal backslash-n instead of each line
-    break, which is a SyntaxError. Code that already parses is never changed,
-    so escapes inside string literals (print("a\\nb")) are safe.
+    Seen: code sent with a literal backslash-n instead of each line break, and
+    with escaped quotes (name = \\"Roydon\\"), both SyntaxErrors. Code that
+    already parses is never changed, so escapes inside string literals
+    (print("a\\nb")) are safe; a repair is used only if the result parses.
     """
-    if "\\n" not in code:
+    if "\\" not in code:
         return code
     try:
         ast.parse(code)
         return code
     except SyntaxError:
         pass
-    repaired = code.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
-    try:
-        ast.parse(repaired)
-    except SyntaxError:
-        return code
-    return repaired
+    newlines = code.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+    quotes = newlines.replace('\\"', '"').replace("\\'", "'")
+    for repaired in (newlines, quotes):
+        try:
+            ast.parse(repaired)
+        except SyntaxError:
+            continue
+        return repaired
+    return code
 
 
 def _truncate(output: str) -> str:

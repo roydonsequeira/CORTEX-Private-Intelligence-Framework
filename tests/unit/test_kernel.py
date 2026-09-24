@@ -943,3 +943,41 @@ def test_quoted_text_is_not_an_instruction() -> None:
     assert _is_unrequested_write("filesystem", args, injected)
     assert not _is_unrequested_write("filesystem", args, 'Save the text "demo done" to notes.txt')
     assert "don't" in instruction_text("Don't forget to save it, it's important").lower()
+
+
+@pytest.mark.asyncio
+async def test_promised_retry_after_a_failed_tool_is_carried_out() -> None:
+    """'Let's try running the code again' after an error gets one real retry."""
+    kernel, router, registry = _make_kernel()
+    registry.execute = AsyncMock(side_effect=[_tool_result(success=False), _tool_result()])
+    router.complete.side_effect = [
+        _mock_model_response('["Run the code with python_exec"]'),
+        _mock_tool_call_response("python_exec", {"code": "print('x')[::-1]"}),
+        _mock_model_response('{"progress": true}'),  # reflector, after the failed step
+        _mock_model_response("It failed. Let's try running the code again."),
+        _mock_tool_call_response("python_exec", {"code": "print('x'[::-1])"}),
+        _mock_model_response("The result is x."),
+    ]
+
+    state = await kernel.run("Use Python to reverse the string 'x'")
+
+    assert registry.execute.await_count == 2
+    assert state.final_answer == "The result is x."
+
+
+def test_promised_retry_pattern() -> None:
+    from cortex.agent.kernel import _PROMISED_RETRY
+
+    assert _PROMISED_RETRY.search("Let's try running the code again.")
+    assert _PROMISED_RETRY.search("Let’s correct the code and run it again")
+    assert not _PROMISED_RETRY.search("The sandbox blocks the os module for safety.")
+
+
+def test_according_to_the_readme_counts_as_document_intent() -> None:
+    """A question about the README's contents must actually read it."""
+    from cortex.agent.kernel import _planned_tools
+
+    tools = _planned_tools(
+        ["doc_search"], ["doc_search", "filesystem"], "According to the README, which model is default?"
+    )
+    assert tools == ["doc_search"]
