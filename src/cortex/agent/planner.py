@@ -13,12 +13,21 @@ logger = structlog.get_logger(__name__)
 _tracer = get_tracer(__name__)
 
 _SYSTEM_PROMPT = """\
-You are a precise task planner. Given a user request and available tools, \
-produce a numbered list of concrete steps. Each step must be independently \
-executable. Do not include steps that require human input. Maximum 8 steps.
+You are a precise task planner. Given a user request and the available tools, \
+produce the SHORTEST plan that fully solves it.
 
-Respond with ONLY a JSON array of strings, e.g.:
-["Step one description", "Step two description"]
+Rules:
+- Use the FEWEST steps possible. Most tasks need only ONE step; simple ones \
+(a calculation, a single tool call, a direct answer) should be a one-step plan.
+- Never repeat a step or re-derive a result you already have. Each step must do \
+something genuinely new.
+- Prefer a single tool that solves the whole task over chaining several tools.
+- Do not invent steps that reference tools not listed, and do not include steps \
+that require human input.
+- Maximum 5 steps.
+
+Respond with ONLY a JSON array of concise step strings, e.g.:
+["Compute the answer with the python_exec tool and report it"]
 """
 
 

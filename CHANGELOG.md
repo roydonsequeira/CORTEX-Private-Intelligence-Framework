@@ -6,6 +6,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Code sandbox now runs ordinary Python that defines a function and calls it, and
+  code that uses tuple unpacking. `_run_code` used separate globals/locals dicts
+  (so `def f(): ...; f()` raised `name 'f' is not defined`), and the
+  `_unpack_sequence_` guard was missing (so `a, b = 1, 2` raised
+  `name '_unpack_sequence_' is not defined`). The worker also now reports any
+  error from untrusted code as a failed result instead of crashing with a
+  traceback.
+- Code sandbox now permits `import` of a whitelist of pure-computation stdlib
+  modules (math, json, random, statistics, itertools, …). LLM-generated code
+  routinely writes `import math`, which previously always failed with
+  "__import__ not found". Unsafe modules (os, sys, subprocess, …) stay blocked,
+  and the attribute guard still prevents traversing an imported module into a
+  forbidden one, so the escape and import-blocking regression tests are unchanged.
+- Planner and executor prompts now push for the shortest plan (often one step)
+  and stopping as soon as the answer is in hand, so small local models stop
+  over-decomposing simple tasks into repetitive steps.
+
 ### Added
 
 - `telemetry_enabled` setting (default on). Set it `false` (e.g.

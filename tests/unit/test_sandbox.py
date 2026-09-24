@@ -27,6 +27,74 @@ async def test_restricted_sandbox_runs_and_blocks_escape() -> None:
     assert "getcwd" not in escape.output
 
 
+@pytest.mark.asyncio
+async def test_restricted_sandbox_defines_and_calls_function() -> None:
+    """A snippet may define a function and call it (single-namespace exec)."""
+    code = "def f():\n    return 42\nprint(f())"
+    result = await RestrictedSandbox().run(code, timeout_seconds=5.0)
+    assert result.success is True
+    assert "42" in result.output
+
+
+@pytest.mark.asyncio
+async def test_restricted_sandbox_supports_tuple_unpacking() -> None:
+    """Tuple-unpacking assignment works (needs the _unpack_sequence_ guard)."""
+    result = await RestrictedSandbox().run("a, b = 1, 2\nprint(a + b)", timeout_seconds=5.0)
+    assert result.success is True
+    assert "3" in result.output
+
+
+@pytest.mark.asyncio
+async def test_restricted_sandbox_runs_iterative_fibonacci() -> None:
+    """The canonical demo snippet (unpacking + loop + function) runs correctly."""
+    code = (
+        "def fibonacci(n):\n"
+        "    a, b = 0, 1\n"
+        "    for _ in range(n - 1):\n"
+        "        a, b = b, a + b\n"
+        "    return a\n"
+        "print(fibonacci(20))"
+    )
+    result = await RestrictedSandbox().run(code, timeout_seconds=5.0)
+    assert result.success is True
+    assert "4181" in result.output
+
+
+@pytest.mark.asyncio
+async def test_restricted_sandbox_allows_safe_imports() -> None:
+    """Common pure-computation modules can be imported (LLMs write `import math`)."""
+    result = await RestrictedSandbox().run(
+        "import math\nprint(math.comb(20, 2))", timeout_seconds=5.0
+    )
+    assert result.success is True
+    assert "190" in result.output
+
+    from_import = await RestrictedSandbox().run(
+        "from math import factorial\nprint(factorial(5))", timeout_seconds=5.0
+    )
+    assert from_import.success is True
+    assert "120" in from_import.output
+
+
+@pytest.mark.asyncio
+async def test_restricted_sandbox_blocks_unsafe_imports() -> None:
+    """Importing os/sys/subprocess is refused even with imports enabled."""
+    for module in ("os", "sys", "subprocess"):
+        result = await RestrictedSandbox().run(f"import {module}", timeout_seconds=5.0)
+        assert result.success is False
+        assert "not permitted" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_restricted_sandbox_import_does_not_reopen_escape() -> None:
+    """An imported safe module cannot be traversed into a forbidden module."""
+    result = await RestrictedSandbox().run(
+        "import uuid\nprint(uuid.os.getcwd())", timeout_seconds=5.0
+    )
+    assert result.success is False
+    assert "getcwd" not in result.output
+
+
 def _fake_docker_client(exit_code: int, logs: bytes) -> tuple[Any, MagicMock]:
     """Return a fake docker client and the container mock it produces."""
     container = MagicMock()
