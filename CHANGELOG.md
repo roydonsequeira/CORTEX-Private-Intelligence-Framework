@@ -16,6 +16,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   page could drive a local agent that runs code), and rejects unknown `Host`
   names to block DNS rebinding (`allowed_hosts`). The Docker stack publishes
   every port, Ollama's included, on `127.0.0.1` only.
+- Local origins on any port are allowed (`cors_origin_regex`), so the UI still
+  works when Next.js moves it to `:3001` because `:3000` is busy; remote web
+  pages can never have a loopback origin.
 - `POST /tools/{name}/execute`, which runs a tool directly and bypasses the
   agent, is disabled unless `debug_tool_endpoint: true`.
 - `cortex serve` warns when binding beyond loopback without an `api_key`.

@@ -139,6 +139,7 @@ All runtime configuration lives in `cortex.yaml` and can be overridden with `COR
 | `api_host` / `api_port` | `127.0.0.1` / `8000` | Bind address; loopback only by default |
 | `api_key` | `null` | When set, require `Authorization: Bearer <key>` on all routes except `/health` and docs |
 | `cors_origins` | `["http://localhost:3000", "http://127.0.0.1:3000"]` | Browser origins allowed to call the API (the local UI) |
+| `cors_origin_regex` | loopback on any port | Also allows `http://localhost:<port>` / `127.0.0.1:<port>` (the UI moves to `:3001` if `:3000` is busy); set `null` to use `cors_origins` only |
 | `allowed_hosts` | `["localhost", "127.0.0.1"]` | Accepted `Host` names (blocks DNS rebinding); add your host name to expose the API, or `["*"]` to disable |
 | `debug_tool_endpoint` | `false` | Enable `POST /tools/{name}/execute`, which runs a tool directly, bypassing the agent |
 | `task_store` | `memory` | Task result backend: `memory` (lost on restart) or `sqlite` (durable) |
@@ -194,7 +195,7 @@ Drop the file in `src/cortex/tools/plugins/` and restart CORTEX.
 
 CORTEX is designed to run on hardware you control, and its guardrails are built for that threat model — chiefly to contain code the LLM generates when a prompt is malicious or injected.
 
-- **Network exposure** is closed by default: the API binds to `127.0.0.1`, accepts browser calls only from the local UI's origin (CORS), and only under local host names (a `Host` check that blocks DNS-rebinding attacks from web pages). The Docker stack publishes every port on `127.0.0.1`. To expose CORTEX, set `api_key` and widen `api_host`, `allowed_hosts` and `cors_origins` deliberately; `cortex serve` warns if you bind beyond loopback without a key. Direct tool execution (`POST /tools/{name}/execute`) is disabled unless `debug_tool_endpoint` is set.
+- **Network exposure** is closed by default: the API binds to `127.0.0.1`, accepts browser calls only from local origins (CORS; loopback on any port), and only under local host names (a `Host` check that blocks DNS-rebinding attacks from web pages). The Docker stack publishes every port on `127.0.0.1`. To expose CORTEX, set `api_key` and widen `api_host`, `allowed_hosts` and `cors_origins` deliberately; `cortex serve` warns if you bind beyond loopback without a key. Direct tool execution (`POST /tools/{name}/execute`) is disabled unless `debug_tool_endpoint` is set.
 
 - **Code execution** uses a pluggable sandbox backend selected by `code_sandbox`:
   - `restricted` (default) — compiled with RestrictedPython and run in a separate spawned process with a hard timeout. The attribute guard blocks dunder access and any traversal that would return a module object, closing escapes such as `json → codecs → sys → sys.modules['os']`. This is a best-effort in-process sandbox, **not** a guarantee against a determined adversary.
