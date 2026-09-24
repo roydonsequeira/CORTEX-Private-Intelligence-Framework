@@ -10,7 +10,7 @@ import structlog
 from opentelemetry.trace import Span
 from pydantic import BaseModel, Field
 
-from cortex.agent.executor import Executor
+from cortex.agent.executor import Executor, instruction_text
 from cortex.agent.loop import LATSLoop
 from cortex.agent.planner import Planner
 from cortex.agent.reflector import Reflector
@@ -178,7 +178,7 @@ class AgentKernel:
                 f"{schema.name} ({schema.description.split('.')[0].strip()})"
                 for schema in self._tool_registry.list_tools()
             ]
-            state.plan = _refuse_destructive_plan(
+            plan = _refuse_destructive_plan(
                 await self._planner.decompose(
                     state.user_input,
                     tools,
@@ -186,6 +186,13 @@ class AgentKernel:
                     conversation=_format_history(history),
                 )
             )
+            # Guards read only the user's own words, never quoted/pasted text.
+            instruction = instruction_text(state.user_input)
+            plan = _refuse_unsupported_file_ops(plan)
+            plan = _drop_unrequested_web_steps(plan, instruction)
+            plan = _keep_code_requests_unrun(plan, instruction)
+            plan = _ensure_file_save_step(plan, instruction)
+            state.plan = _honour_explicit_python(plan, instruction)
         except CortexModelError:
             raise  # Ollama itself is unavailable; the executor would fail the same way
         except Exception as exc:
@@ -197,6 +204,18 @@ class AgentKernel:
         reflector = Reflector(self._router)
         state.status = "executing"
         max_steps = self._settings.max_agent_steps
+        allow_tools = not _is_tool_free_plan(state.plan)
+        planned_tools = (
+            _planned_tools(
+                state.plan,
+                [t.name for t in self._tool_registry.list_tools()],
+                instruction_text(state.user_input),
+            )
+            if allow_tools
+            else []
+        )
+        # Each recovery (skipped planned tool, promised-but-missing retry) runs once.
+        recoveries_left = {"run_code", "nudge", "retry"}
 
         while (
             state.status not in ("complete", "failed")
@@ -225,11 +244,41 @@ class AgentKernel:
                 self._router,
                 event_queue,
                 capability,
-                allow_tools=not _is_tool_free_plan(state.plan),
+                allow_tools=allow_tools,
             )
             if persist:
                 await self._store_step_tools(sid, state, results_before)
 
+            # Tools the model attempted this run (a failed attempt still counts).
+            used = {call.name for m in state.messages for call in (m.tool_calls or [])}
+            skipped = [tool for tool in planned_tools if tool not in used]
+            recovery = (
+                _next_recovery(skipped[0], state.final_answer or "", recoveries_left)
+                if state.status == "complete" and skipped
+                else None
+            )
+            if (
+                state.status == "complete"
+                and state.tool_results
+                and not state.tool_results[-1].success
+                and "retry" in recoveries_left
+                and _PROMISED_RETRY.search(state.final_answer or "")
+            ):
+                # "Let's try running the code again" — and the turn ended there.
+                recoveries_left.discard("retry")
+                await self._retry_failed_tool(state, state.tool_results[-1], event_queue)
+                continue
+            if skipped and recovery:
+                # The plan needs a tool the user asked for, but the model answered
+                # without it (seen: "I have saved x to notes.txt" with no write; a
+                # fetched page "counted" with no Python). Discard that answer and
+                # recover.
+                recoveries_left.discard(recovery)
+                results_before = len(state.tool_results)
+                await self._recover_planned_tool(state, skipped[0], recovery, event_queue)
+                if persist:
+                    await self._store_step_tools(sid, state, results_before)
+                continue
             if state.status in ("complete", "failed"):
                 break
             new_results = state.tool_results[results_before:]
@@ -258,6 +307,73 @@ class AgentKernel:
         if state.status == "complete":
             await self._record_pattern(state.user_input, state, sid)
         return None
+
+    async def _recover_planned_tool(
+        self,
+        state: AgentState,
+        tool: str,
+        recovery: str,
+        event_queue: asyncio.Queue[dict[str, Any]] | None,
+    ) -> None:
+        """Replace a tool-less answer with a real use of ``tool``.
+
+        ``run_code``: the model wrote the Python instead of running it ("use
+        Python to simulate..." answered with a code block), so that code is run in
+        the sandbox on its behalf. ``nudge``: it is told, as the latest message, to
+        call the tool.
+        """
+        answer = state.final_answer or ""
+        if state.messages and state.messages[-1].role == "assistant":
+            state.messages.pop()
+        if state.streamed_final:
+            await self._emit(event_queue, {"type": "token_reset"})
+        state.final_answer = None
+        state.streamed_final = False
+        state.status = "executing"
+
+        if recovery == "run_code":
+            logger.info("planned_tool_ran_model_code", session_id=state.session_id)
+            await self._executor.run_tool_for_model(
+                state, self._tool_registry, "python_exec", {"code": _python_code(answer)},
+                event_queue,
+            )
+            return
+        logger.info("planned_tool_nudge", session_id=state.session_id, tool=tool)
+        state.messages.append(
+            Message(
+                role="user",
+                content=(
+                    f"Use the {tool} tool now to do what I asked. Do not answer until "
+                    "you have its result."
+                ),
+            )
+        )
+
+    async def _retry_failed_tool(
+        self,
+        state: AgentState,
+        failed: ToolResult,
+        event_queue: asyncio.Queue[dict[str, Any]] | None,
+    ) -> None:
+        """Replace "let's try again" (with no retry) by an instruction to retry now."""
+        logger.info("promised_retry_nudge", session_id=state.session_id, tool=failed.tool_name)
+        if state.messages and state.messages[-1].role == "assistant":
+            state.messages.pop()
+        if state.streamed_final:
+            await self._emit(event_queue, {"type": "token_reset"})
+        state.final_answer = None
+        state.streamed_final = False
+        state.status = "executing"
+        state.messages.append(
+            Message(
+                role="user",
+                content=(
+                    f"The {failed.tool_name} call failed: {(failed.error or '')[:300]} "
+                    f"Fix the problem and call {failed.tool_name} again now, instead of "
+                    "describing what you will do."
+                ),
+            )
+        )
 
     async def _finalize_incomplete(
         self,
@@ -513,6 +629,198 @@ def _is_tool_free_plan(plan: list[str]) -> bool:
         return False
     step = plan[0].strip().lower()
     return step.startswith("answer directly") or "refuse" in step
+
+
+# Words in the user's own request that show they want a particular tool used.
+_TOOL_INTENT = {
+    "filesystem": re.compile(
+        r"\b(file|files|folder|directory|save|write|read|create|readme|according to)\b"
+        r"|\.(txt|md|json|csv|py|yaml|yml|log)\b",
+        re.IGNORECASE,
+    ),
+    "python_exec": re.compile(
+        r"\b(python|run|execute|code|script)\b|\btest (it|this|that)\b", re.IGNORECASE
+    ),
+    "calculator": re.compile(r"\b(calculate|calculator|compute)\b", re.IGNORECASE),
+    # "According to the README, ..." answered "based on the README" without reading it.
+    "doc_search": re.compile(
+        r"\b(index|indexed|documents?|search|readme|docs|according to)\b", re.IGNORECASE
+    ),
+    "web_fetch": re.compile(
+        r"https?://|www\.|\b(fetch|url|website|web ?page|online|internet|browse)\b",
+        re.IGNORECASE,
+    ),
+}
+
+
+def _planned_tools(plan: list[str], tool_names: list[str], user_input: str) -> list[str]:
+    """Tools the plan names that the user's request also calls for, in plan order.
+
+    Requiring both keeps the recovery for real misses ("save it to notes.txt"
+    answered without saving) and away from planner over-reach (a calculator step
+    for "how tall is it in feet?").
+    """
+    found: list[str] = []
+    for step in plan:
+        lowered = step.lower()
+        for name in tool_names:
+            intent = _TOOL_INTENT.get(name)
+            if (
+                name not in found
+                and intent is not None
+                and intent.search(user_input)
+                and re.search(rf"\b{re.escape(name.lower())}\b", lowered)
+            ):
+                found.append(name)
+    return found
+
+
+_WEB_STEP = re.compile(r"\bweb_fetch\b|\bfetch\b.*\bhttps?://", re.IGNORECASE)
+
+
+def _drop_unrequested_web_steps(plan: list[str], user_input: str) -> list[str]:
+    """Remove web_fetch steps the user never asked for.
+
+    The planner sometimes plans a fetch of a guessed URL (a Wikipedia page) for a
+    general-knowledge question; that is slow, needs the network, and adds nothing.
+    """
+    if _TOOL_INTENT["web_fetch"].search(user_input):
+        return plan
+    kept = [step for step in plan if not _WEB_STEP.search(step)]
+    if len(kept) == len(plan):
+        return plan
+    logger.info("unrequested_web_steps_dropped", plan=plan)
+    return kept or ["Answer directly from knowledge"]
+
+
+_PYTHON_BLOCK = re.compile(r"```(?:python|py)[ \t]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+
+
+def _python_code(answer: str) -> str:
+    """The Python code blocks of an answer, joined; empty if there are none."""
+    return "\n\n".join(block.strip() for block in _PYTHON_BLOCK.findall(answer)).strip()
+
+
+# An answer that announces a retry instead of doing it ("Let's try running the
+# code again.", "Let me fix that and run it").
+_PROMISED_RETRY = re.compile(
+    r"\b(let[’']?s|let me|i[’']?ll|i will|i am going to|i[’']?m going to)\s+"
+    r"(\w+\s+){0,3}(try|run|re-?run|fix|correct|execute|attempt)\b",
+    re.IGNORECASE,
+)
+
+
+def _next_recovery(tool: str, answer: str, available: set[str]) -> str | None:
+    """How to recover an answer that skipped the planned tool, if any way is left."""
+    if tool == "python_exec" and "run_code" in available and _python_code(answer):
+        return "run_code"
+    if "nudge" in available:
+        return "nudge"
+    return None
+
+
+_EXPLICIT_PYTHON = re.compile(r"\b(use|using)\s+python\b", re.IGNORECASE)
+# "Write a calculator using Python" asks for code to read, not to run.
+_WRITE_CODE = re.compile(
+    r"\b(write|generate|create|build|make|fix|debug|refactor|correct)\b.*"
+    r"\b(code|program|script|function|app|application|game|class|bug)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_RUN_WORDS = re.compile(r"\b(run|execute)\b", re.IGNORECASE)
+_CODE_REQUEST_START = re.compile(
+    r"^\s*(please\s+)?(can you\s+)?(write|generate|create|build|make|develop|implement|code)\b",
+    re.IGNORECASE,
+)
+_PYTHON_STEP = "Run the code with python_exec and report the output"
+
+
+def _honour_explicit_python(plan: list[str], user_input: str) -> list[str]:
+    """Add a python_exec step when the user said "use Python" but the plan has none.
+
+    Seen: "Explain bubble sort vs merge sort, then use Python to time both" was
+    planned as a direct answer, so no tools were offered and nothing was timed.
+    Refusals are left alone.
+    """
+    if not _EXPLICIT_PYTHON.search(user_input) or not _is_tool_free_plan(plan):
+        return plan
+    if "refuse" in plan[0].lower():
+        return plan
+    # "Write a calculator using Python" asks for code to read; "Spell my name
+    # backwards using Python" asks for a result.
+    if _CODE_REQUEST_START.match(user_input) and not _RUN_WORDS.search(user_input):
+        return plan
+    logger.info("explicit_python_step_added", plan=plan)
+    return [*plan, _PYTHON_STEP]
+
+
+_RENAME_STEP = re.compile(r"\b(rename|move)\b", re.IGNORECASE)
+_FILE_TARGET = re.compile(r"\bfilesystem\b|\bfiles?\b|\bfolders?\b|\S+\.\w{1,5}\b", re.IGNORECASE)
+_UNSUPPORTED_REFUSAL = "Politely refuse: the filesystem tool cannot rename, move or delete files"
+
+
+def _refuse_unsupported_file_ops(plan: list[str]) -> list[str]:
+    """Refuse up front when the plan would rename or move files (no tool can).
+
+    Seen: "Rename README.md to OLD.md" planned as a filesystem rename, two invalid
+    tool calls, a stall and a LATS escalation: 67 s to say it could not be done.
+    """
+    for step in plan:
+        if (
+            _RENAME_STEP.search(step)
+            and _FILE_TARGET.search(step)
+            and not _KNOWLEDGE_STEP.match(step)
+        ):
+            logger.info("unsupported_file_op_refused", plan=plan)
+            return [_UNSUPPORTED_REFUSAL]
+    return plan
+
+
+# "Save a Python script called hello.py", "Create a file called todo.md".
+_SAVE_FILE = re.compile(
+    r"\b(save|store)\b.*\.(py|txt|md|json|csv)\b"
+    r"|\b(write|create|make)\s+(a\s+|the\s+)?(new\s+)?file\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_SAVE_STEP = "Write the requested file with the filesystem tool"
+
+
+def _ensure_file_save_step(plan: list[str], user_input: str) -> list[str]:
+    """Make an explicit "save it to hello.py" plan a filesystem write.
+
+    Seen: "Save a Python script called hello.py that prints hello" planned as
+    python_exec, which ran print('hello') and then claimed the file was saved.
+    """
+    if not _SAVE_FILE.search(user_input) or any("filesystem" in s.lower() for s in plan):
+        return plan
+    if _is_tool_free_plan(plan) and "refuse" in plan[0].lower():
+        return plan
+    kept = [
+        step
+        for step in plan
+        if "python_exec" not in step.lower() and not step.lower().startswith("answer directly")
+    ]
+    logger.info("file_save_step_added", plan=plan)
+    return [*kept, _SAVE_STEP]
+
+
+_CODE_ANSWER_STEP = "Answer directly: write the complete code"
+
+
+def _keep_code_requests_unrun(plan: list[str], user_input: str) -> list[str]:
+    """Plan a written answer for "write a script that..." requests that never ask to run it.
+
+    Seen: "Write a Python script that reads a CSV file and prints the average"
+    planned as write-and-run, so the sandbox tried (and failed) to open a file.
+    """
+    if (
+        _WRITE_CODE.search(user_input)
+        and not _RUN_WORDS.search(user_input)
+        and not _EXPLICIT_PYTHON.search(user_input)
+        and any("python_exec" in step.lower() for step in plan)
+    ):
+        logger.info("code_request_kept_unrun", plan=plan)
+        return [_CODE_ANSWER_STEP]
+    return plan
 
 
 def _format_history(history: list[Message]) -> str:

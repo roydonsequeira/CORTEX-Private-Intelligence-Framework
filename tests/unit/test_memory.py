@@ -33,7 +33,7 @@ def _mock_provider() -> OllamaProvider:
     provider.embed = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
     provider.complete = AsyncMock(
         return_value=ModelResponse(
-            content='["User prefers local-only AI.", "Project is named CORTEX."]',
+            content='["The user prefers local-only AI.", "The user\'s project is named CORTEX."]',
             model="llama3.1:8b",
             input_tokens=1,
             output_tokens=1,
@@ -267,3 +267,49 @@ async def test_end_session_consolidates_in_background(tmp_path: Path) -> None:
     await manager.drain()
 
     consolidate.assert_awaited_once_with("s1")
+
+
+def test_consolidation_keeps_only_durable_user_facts() -> None:
+    """Request logs, absences and facts about other things are not stored."""
+    from cortex.memory.semantic import _is_durable_user_fact
+
+    assert _is_durable_user_fact("The user's name is Roydon.")
+    assert _is_durable_user_fact("The user asked to be called Captain.")
+    assert not _is_durable_user_fact("The user requested the 15th Fibonacci number, which is 377.")
+    assert not _is_durable_user_fact("The user asked for a snake game.")
+    assert not _is_durable_user_fact("The user's name is not mentioned.")
+    assert not _is_durable_user_fact("CORTEX has episodic memory stored in SQLite.")
+
+
+def test_only_self_statements_are_consolidated() -> None:
+    """A name inside data ("give me the name: Ada") is not a fact about the user."""
+    from cortex.memory.semantic import _SELF_STATEMENT
+
+    assert _SELF_STATEMENT.search("My name is Roydon and I'm interviewing at Textron")
+    assert _SELF_STATEMENT.search("Call me Captain from now on")
+    assert _SELF_STATEMENT.search("I prefer answers in bullet points")
+    assert not _SELF_STATEMENT.search(
+        'Use Python to parse this JSON and give me the name: {"name": "Ada"}'
+    )
+    assert not _SELF_STATEMENT.search("What is the capital of France?")
+
+
+@pytest.mark.asyncio
+async def test_consolidation_skips_turns_without_self_statements(tmp_path: Path) -> None:
+    """No model call when the latest user turn says nothing about the user."""
+    provider = _mock_provider()
+    episodic = EpisodicMemory(tmp_path / "cortex.db")
+    await episodic.initialize()
+    semantic = SemanticMemory(
+        tmp_path / "chroma",
+        "nomic-embed-text",
+        provider,
+        episodic_memory=episodic,
+        client=chromadb.EphemeralClient(),
+        collection_name="self_statement_test",
+    )
+    await episodic.store(
+        _entry('Parse this JSON and give me the name: {"name": "Ada"}', "episodic", session_id="s", role="user")
+    )
+    await semantic.consolidate("s")
+    cast(AsyncMock, provider.complete).assert_not_awaited()

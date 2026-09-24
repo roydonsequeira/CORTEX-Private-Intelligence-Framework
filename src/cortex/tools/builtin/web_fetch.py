@@ -1,11 +1,13 @@
 """Web fetch tool — offline-tolerant HTML/text retrieval with robots.txt checks."""
 
 import asyncio
+import ipaddress
+import socket
 import ssl
 import time
 from typing import Any, Literal
 from urllib import robotparser
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import html2text
 import httpx
@@ -24,7 +26,41 @@ _USER_AGENT = (
     "+https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework)"
 )
 _ROBOTS_AGENT = "CORTEX"
+_MAX_REDIRECTS = 5
 _tracer = get_tracer(__name__)
+
+
+_PRIVATE_HOST_ERROR = (
+    "Refused: {host} is a local or private network address. web_fetch only reaches "
+    "public websites, so a web page or prompt cannot use it to probe this machine or "
+    "the local network."
+)
+
+
+async def _is_public_host(host: str) -> bool:
+    """False when host is, or resolves to, a loopback, private, link-local or reserved IP.
+
+    Blocks server-side request forgery: without it a prompt (or text injected into
+    a fetched page) could make the agent read localhost services such as the
+    Ollama or CORTEX APIs, a router admin page, or cloud metadata at
+    169.254.169.254. A host that does not resolve is left to fail normally.
+    """
+    host = host.strip("[]")
+    if not host:
+        return False
+    try:
+        addresses = [ipaddress.ip_address(host)]
+    except ValueError:
+        try:
+            infos = await asyncio.get_running_loop().getaddrinfo(host, None)
+        except (socket.gaierror, UnicodeError):
+            return True
+        addresses = [ipaddress.ip_address(str(info[4][0]).split("%")[0]) for info in infos]
+    for address in addresses:
+        mapped = getattr(address, "ipv4_mapped", None)
+        if not (mapped or address).is_global:
+            return False
+    return True
 
 
 def _ssl_context() -> ssl.SSLContext | bool:
@@ -63,9 +99,10 @@ class WebFetchTool(BaseTool):
     )
 
     def __init__(self, timeout_seconds: float = 20.0, client: Any | None = None) -> None:
+        # Redirects are followed by hand so every hop is checked (see _fetch).
         self._client = client or httpx.AsyncClient(
             timeout=timeout_seconds,
-            follow_redirects=True,
+            follow_redirects=False,
             verify=_ssl_context(),
             headers={"User-Agent": _USER_AGENT},
         )
@@ -86,9 +123,13 @@ class WebFetchTool(BaseTool):
                 span.set_attribute("url.full", url)
                 span.set_attribute("server.address", parsed.netloc)
                 span.set_attribute("http.request.method", "GET")
+                if not await _is_public_host(parsed.hostname or ""):
+                    return _result(False, "", start, _PRIVATE_HOST_ERROR.format(host=parsed.hostname))
                 if not await self._allowed_by_robots(url):
                     return _result(False, "", start, "Blocked by the site's robots.txt.")
-                response = await self._client.get(url, headers={"User-Agent": _USER_AGENT})
+                response = await self._fetch(url)
+                if response is None:
+                    return _result(False, "", start, _PRIVATE_HOST_ERROR.format(host="a redirect target"))
                 span.set_attribute("http.response.status_code", response.status_code)
             if response.status_code >= 400:
                 return _result(
@@ -122,6 +163,19 @@ class WebFetchTool(BaseTool):
             )
         except httpx.HTTPError as exc:
             return _result(False, "", start, f"Request to {parsed.netloc} failed: {exc}")
+
+    async def _fetch(self, url: str) -> httpx.Response | None:
+        """GET url, following redirects only to public hosts (None if one is not)."""
+        response = await self._client.get(url, headers={"User-Agent": _USER_AGENT})
+        for _ in range(_MAX_REDIRECTS):
+            location = response.headers.get("location")
+            if not response.is_redirect or not location:
+                return response
+            url = urljoin(url, location)
+            if not await _is_public_host(urlparse(url).hostname or ""):
+                return None
+            response = await self._client.get(url, headers={"User-Agent": _USER_AGENT})
+        return response
 
     async def _allowed_by_robots(self, url: str) -> bool:
         """Return whether url is allowed for CORTEX according to robots.txt."""
