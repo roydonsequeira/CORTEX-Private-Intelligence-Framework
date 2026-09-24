@@ -389,6 +389,23 @@ async def test_run_time_budget_ends_with_best_effort_answer() -> None:
 
 
 @pytest.mark.asyncio
+async def test_code_generation_plan_offers_no_tools() -> None:
+    """'Generate code for a calculator' is written out, not routed to the calculator tool."""
+    kernel, router, registry = _make_kernel()
+    registry.to_ollama_tools.return_value = [{"type": "function", "function": {"name": "calculator"}}]
+    router.complete.side_effect = [
+        _mock_model_response('["Answer directly: write the complete code"]'),
+        _mock_model_response("```python\ndef add(a, b):\n    return a + b\n```"),
+    ]
+
+    state = await kernel.run("generate a python code for calculator")
+
+    assert state.status == "complete"
+    assert router.complete.await_args_list[1].kwargs.get("tools") is None
+    registry.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_tool_plan_still_offers_tools() -> None:
     """A plan that needs a tool keeps the tool schemas."""
     kernel, router, registry = _make_kernel()
