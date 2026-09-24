@@ -247,6 +247,7 @@ async def test_payload_pins_context_window_and_keep_alive() -> None:
     with patch.object(provider._client, "post", new=post_mock):
         await provider.complete("qwen2.5:7b", [Message(role="user", content="Hi")])
 
+    assert post_mock.await_args is not None
     payload = post_mock.await_args.kwargs["json"]
     assert payload["options"]["num_ctx"] == 8192
     assert payload["keep_alive"] == "30m"

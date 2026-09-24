@@ -1,6 +1,7 @@
 """Filesystem tool — safe read/write/list/exists under an allowed root."""
 
 import json
+import re
 import time
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from cortex.tools.base import BaseTool, ToolResult, ToolSchema
 
 _MAX_READ_BYTES = 1_048_576
 _MAX_WRITE_BYTES = 524_288
+# "C:/..." or "c:\..." (after backslashes are normalised to "/").
+_WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:(/|$)")
 
 
 class FileSystemTool(BaseTool):
@@ -102,7 +105,15 @@ class FileSystemTool(BaseTool):
         candidate = Path(cleaned)
         if ".." in candidate.parts:
             raise OSError("Path must be relative and must not contain '..'.")
-        if candidate.is_absolute() or candidate.drive or cleaned.startswith("//"):
+        # Checked textually as well: on Linux, Path("C:/Windows") has no drive and
+        # is not absolute, so a Windows-style path would otherwise be treated as a
+        # relative folder named "C:" instead of being denied.
+        if (
+            candidate.is_absolute()
+            or candidate.drive
+            or cleaned.startswith("//")
+            or _WINDOWS_DRIVE.match(cleaned)
+        ):
             raise denied
         resolved = (self._allowed_root / candidate).resolve()
         if not resolved.is_relative_to(self._allowed_root):
