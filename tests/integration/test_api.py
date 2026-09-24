@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -11,6 +12,7 @@ from fastapi import FastAPI
 from cortex.agent.kernel import AgentState
 from cortex.api.server import create_app
 from cortex.api.task_store import InMemoryTaskStore
+from cortex.memory.base import MemoryEntry, MemoryQuery
 from cortex.models.provider import Message
 from cortex.tools.base import ToolSchema
 
@@ -371,3 +373,33 @@ async def test_request_id_header_is_sanitised(app: FastAPI) -> None:
     assert good.headers["X-Request-ID"] == "abc-123"
     assert bad.headers["X-Request-ID"] != "x" * 200
     assert len(bad.headers["X-Request-ID"]) == 32
+
+
+class _FakeMemory:
+    def __init__(self, content: str, memory_type: str) -> None:
+        self._entry = MemoryEntry(
+            id="x",
+            content=content,
+            metadata={},
+            timestamp=datetime.now(UTC),
+            memory_type=memory_type,  # type: ignore[arg-type]
+        )
+
+    async def retrieve(self, query: MemoryQuery) -> list[MemoryEntry]:
+        return [self._entry]
+
+
+@pytest.mark.asyncio
+async def test_memory_search_can_include_procedural_patterns(app: FastAPI) -> None:
+    """types=procedural shows learned tool patterns; the default search does not."""
+    app.state.episodic_memory = _FakeMemory("hello", "episodic")
+    app.state.semantic_memory = _FakeMemory("The user's name is Sam.", "semantic")
+    app.state.procedural_memory = _FakeMemory("fibonacci -> python_exec", "procedural")
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
+        default = await client.get("/memory/search", params={"q": "x"})
+        with_patterns = await client.get(
+            "/memory/search", params={"q": "x", "types": "procedural"}
+        )
+    assert {r["memory_type"] for r in default.json()["results"]} == {"episodic", "semantic"}
+    assert [r["memory_type"] for r in with_patterns.json()["results"]] == ["procedural"]
