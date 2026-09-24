@@ -70,7 +70,9 @@ numpy or pandas access; if an import is blocked, say the sandbox blocks it for \
 safety, and use the filesystem tool for anything involving files.
 - As soon as a tool result gives you what you need, stop calling tools and \
 give the final answer. Report the tool's result exactly as returned — never \
-recompute or "correct" a number the tool gave you.
+recompute or "correct" a number the tool gave you, and copy long numbers digit \
+for digit without adding commas. If a tool produced no output, run it again \
+with print() rather than guessing the value.
 - Only state facts that come from your knowledge, the conversation, or tool \
 results. If a tool fails, correct the arguments once, or answer with what you \
 know and briefly say what could not be done.
@@ -239,6 +241,18 @@ class Executor:
             await self._emit(event_queue, {"type": "token_reset"})
         return "".join(parts), tool_calls or None, emitted and not tool_calls
 
+    async def run_tool_for_model(
+        self,
+        state: "AgentState",
+        tool_registry: ToolRegistry,
+        tool_name: str,
+        arguments: dict[str, Any],
+        event_queue: asyncio.Queue[dict[str, Any]] | None = None,
+    ) -> "AgentState":
+        """Execute one tool call on the model's behalf, exactly as if it had made it."""
+        raw = [{"function": {"name": tool_name, "arguments": arguments}}]
+        return await self._handle_tool_calls(raw, "", state, tool_registry, event_queue)
+
     async def _handle_tool_calls(
         self,
         raw_tool_calls: list[dict[str, Any]],
@@ -265,6 +279,10 @@ class Executor:
         )
 
         for tool_name, kwargs, parse_error in parsed:
+            if _is_unrequested_overwrite(tool_name, kwargs, state.user_input):
+                # Small models set overwrite=true on their own; only the user can
+                # ask to replace an existing file.
+                kwargs = {**kwargs, "overwrite": False}
             signature = _call_signature(tool_name, kwargs)
             with _tracer.start_as_current_span("executor.tool_call") as span:
                 span.set_attribute("session_id", state.session_id)
@@ -388,6 +406,23 @@ def _is_unrequested_write(tool_name: str, kwargs: dict[str, Any], user_input: st
         tool_name == "filesystem"
         and kwargs.get("action") == "write_file"
         and not _FILE_INTENT.search(user_input)
+    )
+
+
+_OVERWRITE_INTENT = re.compile(
+    r"\b(overwrite|overwriting|replace|replacing|update|updating|change|edit|modify|"
+    r"rewrite|append)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_unrequested_overwrite(tool_name: str, kwargs: dict[str, Any], user_input: str) -> bool:
+    """True for overwrite=true on a write when the user never asked to replace a file."""
+    return (
+        tool_name == "filesystem"
+        and kwargs.get("action") == "write_file"
+        and kwargs.get("overwrite") in (True, "true", "True")
+        and not _OVERWRITE_INTENT.search(user_input)
     )
 
 

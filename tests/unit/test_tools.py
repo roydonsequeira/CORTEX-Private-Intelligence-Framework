@@ -307,3 +307,50 @@ async def test_executor_does_not_retry_deterministic_failures() -> None:
     result = await Executor()._execute_with_retry("python_exec", registry, code="x=")
     assert result.success is False
     assert registry.execute.await_count == 1
+
+
+class _FakeSemanticMemory:
+    """Stores entries in a list; retrieve returns them all (no embeddings)."""
+
+    def __init__(self) -> None:
+        self.entries: dict[str, object] = {}
+
+    async def store(self, entry: object) -> str:
+        self.entries[entry.id] = entry  # type: ignore[attr-defined]
+        return entry.id  # type: ignore[attr-defined,no-any-return]
+
+    async def retrieve(self, query: object) -> list[object]:
+        return list(self.entries.values())
+
+
+@pytest.mark.asyncio
+async def test_doc_search_with_path_indexes_that_document_first(tmp_path: Path) -> None:
+    """'Search README.md for X' works even when the model skipped index_document."""
+    from cortex.tools.builtin.doc_search import DocumentSearchTool
+
+    (tmp_path / "README.md").write_text("Memory tiers: working, episodic, semantic.")
+    (tmp_path / "other.md").write_text("Unrelated notes about lunch.")
+    memory = _FakeSemanticMemory()
+    tool = DocumentSearchTool(memory, allowed_root=tmp_path)  # type: ignore[arg-type]
+    await tool.execute(action="index_document", path="other.md")
+
+    result = await tool.execute(action="search", query="memory tiers", path="README.md")
+
+    assert result.success is True
+    assert "episodic" in result.output
+    assert "lunch" not in result.output  # results are limited to the named document
+
+
+@pytest.mark.asyncio
+async def test_doc_search_index_with_query_also_searches(tmp_path: Path) -> None:
+    """index_document with a query returns the top matches in the same call."""
+    from cortex.tools.builtin.doc_search import DocumentSearchTool
+
+    (tmp_path / "README.md").write_text("The sandbox runs code in a separate process.")
+    tool = DocumentSearchTool(_FakeSemanticMemory(), allowed_root=tmp_path)  # type: ignore[arg-type]
+
+    result = await tool.execute(action="index_document", path="README.md", query="sandbox")
+
+    assert result.success is True
+    assert result.output.startswith("Indexed 1 chunks.")
+    assert "separate process" in result.output

@@ -15,7 +15,7 @@ from cortex.memory.manager import MemoryManager
 from cortex.memory.procedural import ToolPattern
 from cortex.models.provider import Message, ModelResponse, StreamChunk
 from cortex.models.router import ModelRouter
-from cortex.tools.base import ToolResult
+from cortex.tools.base import ToolResult, ToolSchema
 from cortex.tools.registry import ToolRegistry
 
 
@@ -429,6 +429,48 @@ async def test_run_request_for_pygame_code_is_answered_without_the_model() -> No
 
 
 @pytest.mark.asyncio
+async def test_answer_skipping_planned_tool_is_retried_once() -> None:
+    """A plan naming a tool, answered without calling it, gets one explicit retry."""
+    kernel, router, registry = _make_kernel()
+    registry.list_tools.return_value = [
+        ToolSchema(name="filesystem", description="Read and write files.", parameters={})
+    ]
+    registry.to_ollama_tools.return_value = [{"type": "function", "function": {"name": "filesystem"}}]
+    router.complete.side_effect = [
+        _mock_model_response('["Write the text to notes.txt with the filesystem tool"]'),
+        _mock_model_response("I cannot perform this action now."),
+        _mock_tool_call_response("filesystem", {"action": "write_file", "path": "notes.txt"}),
+        _mock_model_response("Saved notes.txt."),
+    ]
+
+    state = await kernel.run('Save the text "done" to notes.txt')
+
+    assert state.final_answer == "Saved notes.txt."
+    registry.execute.assert_awaited_once()
+    assert all("cannot perform" not in m.content for m in state.messages)
+
+
+@pytest.mark.asyncio
+async def test_planned_tool_retry_happens_only_once() -> None:
+    """If the model still answers without the tool, that answer stands."""
+    kernel, router, registry = _make_kernel()
+    registry.list_tools.return_value = [
+        ToolSchema(name="python_exec", description="Run Python.", parameters={})
+    ]
+    router.complete.side_effect = [
+        _mock_model_response('["Run the code with python_exec"]'),
+        _mock_model_response("First answer."),
+        _mock_model_response("Second answer."),
+    ]
+
+    state = await kernel.run("Use Python to add 2 and 2")
+
+    assert state.status == "complete"
+    assert state.final_answer == "Second answer."
+    assert router.complete.await_count == 3
+
+
+@pytest.mark.asyncio
 async def test_tool_plan_still_offers_tools() -> None:
     """A plan that needs a tool keeps the tool schemas."""
     kernel, router, registry = _make_kernel()
@@ -739,3 +781,67 @@ async def test_run_with_use_lats_routes_to_lats(monkeypatch: pytest.MonkeyPatch)
 
     assert state is lats_state
     run_mock.assert_awaited_once_with("hard task", "s1")
+
+
+def test_planned_tool_needs_matching_user_intent() -> None:
+    """A tool step is only enforced when the request itself calls for that tool."""
+    from cortex.agent.kernel import _planned_tool
+
+    names = ["calculator", "filesystem", "python_exec"]
+    assert _planned_tool(["Save it with the filesystem tool"], names, "Save x to notes.txt") == "filesystem"
+    assert _planned_tool(["Compute it with the calculator tool"], names, "how tall is it in feet?") is None
+
+
+def test_unrequested_web_fetch_steps_are_dropped() -> None:
+    """A guessed Wikipedia fetch for a knowledge question becomes a direct answer."""
+    from cortex.agent.kernel import _drop_unrequested_web_steps
+
+    plan = ["web_fetch 'https://en.wikipedia.org/wiki/Mount_Everest'"]
+    assert _drop_unrequested_web_steps(plan, "What is the tallest mountain?") == [
+        "Answer directly from knowledge"
+    ]
+    assert _drop_unrequested_web_steps(plan, "Fetch https://example.com") == plan
+
+
+def test_explicit_use_python_adds_a_python_step() -> None:
+    """'...then use Python to time both' is never answered from knowledge alone."""
+    from cortex.agent.kernel import _honour_explicit_python
+
+    direct = ["Answer directly from knowledge"]
+    timed = _honour_explicit_python(direct, "Explain bubble sort, then use Python to time it")
+    assert len(timed) == 2 and "python_exec" in timed[1]
+    code = ["Answer directly: write the complete code"]
+    assert _honour_explicit_python(code, "Write a calculator using Python") == code
+    assert _honour_explicit_python(direct, "Write a snake game program using Python") == direct
+    refusal = ["Politely refuse: deleting files is not permitted"]
+    assert _honour_explicit_python(refusal, "Use Python to delete every file") == refusal
+
+
+def test_overwrite_needs_user_intent() -> None:
+    """overwrite=true set by the model alone is not honoured."""
+    from cortex.agent.executor import _is_unrequested_overwrite
+
+    args = {"action": "write_file", "path": "notes.txt", "content": "x", "overwrite": True}
+    assert _is_unrequested_overwrite("filesystem", args, 'Save "x" to notes.txt')
+    assert not _is_unrequested_overwrite("filesystem", args, "Overwrite notes.txt with x")
+
+
+@pytest.mark.asyncio
+async def test_python_written_instead_of_run_is_executed() -> None:
+    """'Use Python to ...' answered with a code block runs that code in the sandbox."""
+    kernel, router, registry = _make_kernel()
+    registry.list_tools.return_value = [
+        ToolSchema(name="python_exec", description="Run Python.", parameters={})
+    ]
+    router.complete.side_effect = [
+        _mock_model_response('["Run the code with python_exec and report the output"]'),
+        _mock_model_response("Here is the code:\n```python\nprint(7)\n```"),
+        _mock_model_response("The most common sum is 7."),
+    ]
+
+    state = await kernel.run("Use Python to simulate rolling two dice")
+
+    registry.execute.assert_awaited_once()
+    assert registry.execute.await_args.args[0] == "python_exec"
+    assert registry.execute.await_args.kwargs == {"code": "print(7)"}
+    assert state.final_answer == "The most common sum is 7."

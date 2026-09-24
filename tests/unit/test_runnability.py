@@ -83,6 +83,14 @@ def test_unknown_package_is_named_with_install_command() -> None:
     assert "pip install numpy" in reply
 
 
+def test_install_command_uses_pip_package_names() -> None:
+    code = "```python\nimport requests\nfrom bs4 import BeautifulSoup\n```"
+    reply = cannot_run_reply("run it", _history(code))
+
+    assert reply is not None
+    assert "pip install requests beautifulsoup4" in reply
+
+
 def test_blocked_stdlib_module_is_named() -> None:
     reply = cannot_run_reply("run it", _history("```python\nimport os\nprint(os.getcwd())\n```"))
 

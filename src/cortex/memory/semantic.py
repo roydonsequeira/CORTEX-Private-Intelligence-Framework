@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -19,13 +20,29 @@ logger = structlog.get_logger(__name__)
 _tracer = get_tracer(__name__)
 
 _MIN_CONSOLIDATION_CHARS = 12
+# "The user requested the 15th Fibonacci number" logs a one-off request, not a
+# durable fact; small models extract these despite the prompt, so drop them.
+_REQUEST_LOG = re.compile(
+    r"\buser\s+(asked|requested|wanted to know|inquired|enquired|queried)\s+"
+    r"(about|for|what|how|why|whether|if|the|a|an|to (know|compute|calculate|run|write|see))\b",
+    re.IGNORECASE,
+)
+# "The user's name is not mentioned" is an absence, not a fact, and it outranks
+# (and contradicts) the real "The user's name is Roydon" at recall time.
+_NON_FACT = re.compile(
+    r"\bnot (mentioned|provided|specified|stated|given|known|shared)\b"
+    r"|\bunknown\b|\bno information\b",
+    re.IGNORECASE,
+)
+_ABOUT_USER = re.compile(r"\buser\b", re.IGNORECASE)
 _CONSOLIDATION_PROMPT = (
     "You maintain long-term memory about the USER for a personal AI assistant. "
     "From this exchange, extract at most 3 durable facts about the user — their "
     "name, role, preferences, projects, goals, or stated decisions. Each fact is a "
     "short standalone sentence in the third person (e.g. \"The user's name is Sam.\"). "
-    "Do NOT include general knowledge, calculation results, or anything about the "
-    "assistant. If there is nothing worth remembering, return []. "
+    "Do NOT include general knowledge, calculation results, what the user asked "
+    "for or requested in this exchange, or anything about the assistant. If there "
+    "is nothing worth remembering, return []. "
     "Respond with ONLY a JSON array of strings."
 )
 
@@ -132,7 +149,8 @@ class SemanticMemory(BaseMemory):
         if not isinstance(facts, list):
             logger.warning("semantic_consolidation_parse_failed", raw=response.content[:200])
             return
-        for fact in [str(f).strip() for f in facts if str(f).strip()][:3]:
+        kept = [fact for fact in (str(f).strip() for f in facts) if _is_durable_user_fact(fact)]
+        for fact in kept[:3]:
             await self.store(
                 MemoryEntry(
                     id=_fact_id(fact),
@@ -148,6 +166,18 @@ class SemanticMemory(BaseMemory):
         await self.initialize()
         assert self._collection is not None
         self._collection.delete(ids=[entry_id])
+
+
+def _is_durable_user_fact(fact: str) -> bool:
+    """Keep third-person facts about the user; drop request logs, absences and
+    facts about anything else (e.g. "CORTEX has episodic memory" from a RAG answer).
+    """
+    return (
+        bool(fact)
+        and _ABOUT_USER.search(fact) is not None
+        and _REQUEST_LOG.search(fact) is None
+        and _NON_FACT.search(fact) is None
+    )
 
 
 def _fact_id(fact: str) -> str:

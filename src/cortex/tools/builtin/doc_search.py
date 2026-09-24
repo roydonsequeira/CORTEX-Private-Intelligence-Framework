@@ -54,7 +54,18 @@ class DocumentSearchTool(BaseTool):
                 query = str(kwargs.get("query", "")).strip()
                 if not query:
                     return _result(False, "", start, "The 'search' action requires a 'query'.")
-                results = await self.search(query, _int_arg(kwargs.get("top_k"), 5))
+                source = None
+                if kwargs.get("path"):
+                    # "Search README.md for X": models often skip the index step, so
+                    # index that document first (re-indexing replaces its chunks,
+                    # so this is idempotent) and search only within it.
+                    await self.index_document(
+                        str(kwargs["path"]),
+                        _int_arg(kwargs.get("chunk_size"), 512),
+                        _int_arg(kwargs.get("overlap"), 64),
+                    )
+                    source = str(self._resolve(str(kwargs["path"])))
+                results = await self.search(query, _int_arg(kwargs.get("top_k"), 5), source)
                 if not results:
                     return _result(
                         True,
@@ -72,22 +83,36 @@ class DocumentSearchTool(BaseTool):
                     _int_arg(kwargs.get("overlap"), 64),
                 )
                 output = f"Indexed {chunks} chunks."
+                query = str(kwargs.get("query", "")).strip()
+                if query:
+                    # Index and search in one call: saves the model a second step.
+                    source = str(self._resolve(str(kwargs["path"])))
+                    matches = await self.search(query, _int_arg(kwargs.get("top_k"), 5), source)
+                    output += " Top matches: " + json.dumps(matches, ensure_ascii=False)
             else:
                 return _result(False, "", start, f"Unsupported action: {action}")
         except (OSError, ValueError, TypeError) as exc:
             return _result(False, "", start, str(exc))
         return _result(True, output, start)
 
-    async def search(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
+    async def search(
+        self, query: str, top_k: int = 5, source: str | None = None
+    ) -> list[dict[str, Any]]:
         """Search indexed document chunks by semantic similarity.
 
         Semantic memory also holds facts learned about the user; only chunks of
-        indexed documents (which carry a ``source_path``) are returned here.
+        indexed documents (which carry a ``source_path``) are returned here, and
+        only chunks of ``source`` when it is given.
         """
         entries = await self._semantic_memory.retrieve(
             MemoryQuery(text=query, top_k=max(top_k * 4, 20))
         )
-        documents = [entry for entry in entries if entry.metadata.get("source_path")]
+        documents = [
+            entry
+            for entry in entries
+            if entry.metadata.get("source_path")
+            and (source is None or entry.metadata.get("source_path") == source)
+        ]
         return [
             {
                 "content": entry.content,

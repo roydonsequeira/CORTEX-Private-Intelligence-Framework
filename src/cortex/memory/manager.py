@@ -103,7 +103,8 @@ class MemoryManager:
             return ""
         lines = [f"- {entry.content}" for entry in entries]
         return (
-            "Long-term memory (facts from earlier sessions — use only if relevant):\n"
+            "Long-term memory (facts about the user from earlier sessions — use only "
+            "if relevant; when asked what you know about the user, include all of them):\n"
             + "\n".join(lines)
         )
 
