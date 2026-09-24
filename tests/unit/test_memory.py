@@ -279,3 +279,37 @@ def test_consolidation_keeps_only_durable_user_facts() -> None:
     assert not _is_durable_user_fact("The user asked for a snake game.")
     assert not _is_durable_user_fact("The user's name is not mentioned.")
     assert not _is_durable_user_fact("CORTEX has episodic memory stored in SQLite.")
+
+
+def test_only_self_statements_are_consolidated() -> None:
+    """A name inside data ("give me the name: Ada") is not a fact about the user."""
+    from cortex.memory.semantic import _SELF_STATEMENT
+
+    assert _SELF_STATEMENT.search("My name is Roydon and I'm interviewing at Textron")
+    assert _SELF_STATEMENT.search("Call me Captain from now on")
+    assert _SELF_STATEMENT.search("I prefer answers in bullet points")
+    assert not _SELF_STATEMENT.search(
+        'Use Python to parse this JSON and give me the name: {"name": "Ada"}'
+    )
+    assert not _SELF_STATEMENT.search("What is the capital of France?")
+
+
+@pytest.mark.asyncio
+async def test_consolidation_skips_turns_without_self_statements(tmp_path: Path) -> None:
+    """No model call when the latest user turn says nothing about the user."""
+    provider = _mock_provider()
+    episodic = EpisodicMemory(tmp_path / "cortex.db")
+    await episodic.initialize()
+    semantic = SemanticMemory(
+        tmp_path / "chroma",
+        "nomic-embed-text",
+        provider,
+        episodic_memory=episodic,
+        client=chromadb.EphemeralClient(),
+        collection_name="self_statement_test",
+    )
+    await episodic.store(
+        _entry('Parse this JSON and give me the name: {"name": "Ada"}', "episodic", session_id="s", role="user")
+    )
+    await semantic.consolidate("s")
+    cast(AsyncMock, provider.complete).assert_not_awaited()

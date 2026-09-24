@@ -981,3 +981,11 @@ def test_according_to_the_readme_counts_as_document_intent() -> None:
         ["doc_search"], ["doc_search", "filesystem"], "According to the README, which model is default?"
     )
     assert tools == ["doc_search"]
+
+
+def test_test_it_counts_as_a_run_request() -> None:
+    from cortex.agent.kernel import _planned_tools
+
+    assert _planned_tools(
+        ["Run the code with python_exec"], ["python_exec"], "test it with [1, 3, 5] and [2, 4, 6]"
+    ) == ["python_exec"]
