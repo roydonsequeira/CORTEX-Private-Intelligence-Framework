@@ -128,6 +128,9 @@ class Settings(BaseSettings):
     api_port: int = 8000
     api_key: str | None = None
     cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    # Any port on the local machine (the UI moves to :3001 when :3000 is busy).
+    # Remote web pages can never have a loopback origin, so this stays private.
+    cors_origin_regex: str | None = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
     allowed_hosts: list[str] = ["localhost", "127.0.0.1"]
     # POST /tools/{name}/execute runs a tool directly, bypassing the agent. Debug only.
     debug_tool_endpoint: bool = False

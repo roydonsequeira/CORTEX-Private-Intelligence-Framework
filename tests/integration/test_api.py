@@ -321,6 +321,23 @@ async def test_cors_allows_only_the_local_ui_origin(app: FastAPI) -> None:
 
 
 @pytest.mark.asyncio
+async def test_cors_allows_the_ui_on_another_local_port(app: FastAPI) -> None:
+    """If :3000 is busy the UI runs on :3001; loopback origins on any port work."""
+    transport = httpx.ASGITransport(app=app)
+    preflight = {"Access-Control-Request-Method": "POST"}
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
+        alt_port = await client.options(
+            "/chat/stream", headers={"Origin": "http://localhost:3001", **preflight}
+        )
+        lookalike = await client.options(
+            "/chat/stream", headers={"Origin": "http://localhost.evil.example", **preflight}
+        )
+
+    assert alt_port.headers.get("access-control-allow-origin") == "http://localhost:3001"
+    assert "access-control-allow-origin" not in lookalike.headers
+
+
+@pytest.mark.asyncio
 async def test_direct_tool_endpoint_is_disabled_by_default(app: FastAPI) -> None:
     """POST /tools/{name}/execute bypasses the agent, so it is off unless enabled."""
     from unittest.mock import AsyncMock
