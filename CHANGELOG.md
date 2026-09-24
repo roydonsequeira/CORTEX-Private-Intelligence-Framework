@@ -24,9 +24,52 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Planner and executor prompts now push for the shortest plan (often one step)
   and stopping as soon as the answer is in hand, so small local models stop
   over-decomposing simple tasks into repetitive steps.
+- Follow-up questions now work: the user's turn is stored, the session's last
+  exchanges are replayed into context, and new session IDs are dashed UUIDs that
+  round-trip through the API unchanged (a hex ID came back dashed and split the
+  conversation in two).
+- Long-term memory no longer fails with "Error creating hnsw segment reader:
+  Nothing found on disk": semantic and procedural memory now share one ChromaDB
+  client per path instead of opening two on the same directory.
+- Tool results reach the model labelled (`[calculator result] 403`) and paired
+  with the tool call that produced them; with bare values, qwen2.5:7b sometimes
+  reported its own arithmetic instead (397). Identical repeated tool calls are
+  not re-run, and only raised tool errors are retried.
+- Sandbox supports `+=`, item and attribute assignment, classes,
+  `datetime.strptime` and more builtins, and reports a trailing expression's
+  value like a REPL. Escapes remain blocked.
+- The calculator bounds exponents and factorials; `9**9**9` used to freeze the
+  event loop and with it the whole API.
+- `web_fetch` verifies TLS against the OS trust store (works behind HTTPS
+  inspection), sends a descriptive User-Agent, and reports real errors (an HTTP
+  404 is no longer "offline mode").
+- File reads and writes are UTF-8 on every platform (Windows defaulted to
+  cp1252), and paths outside the workspace get a clear "access denied".
+- Ollama is addressed as 127.0.0.1: on Windows, `localhost` cost ~2 s per new
+  connection through the IPv6 fallback (2,062 ms vs 23 ms).
+- Planner, reflector, LATS and supervisor tolerate fenced or wrapped JSON from
+  small models.
+
+### Security
+
+- Prompt-injection hardening: destructive requests are refused, tool and file
+  content is treated as untrusted data, `filesystem` never overwrites an
+  existing file without `overwrite: true` and never writes hidden paths, and
+  `doc_search` can only index files inside the workspace.
 
 ### Added
 
+- `cortex` command line: `cortex serve` (starts the API inside the installed
+  environment, refusing a busy port), `cortex doctor` (pre-flight check of
+  Python, config, Ollama, pulled models, data directories, port and HTTPS) and
+  `cortex reset-memory --yes`.
+- Reliability for live use: startup model check and background warm-up;
+  `ollama_timeout_seconds`, `ollama_num_ctx` and `ollama_keep_alive` settings;
+  SSE keep-alive pings; a best-effort answer at the step limit or on a stall;
+  time-boxed LATS escalation; actionable errors when Ollama is down or a model
+  is not pulled; `/health` names missing models.
+- Background memory consolidation that extracts only facts about the user,
+  deduplicated by content.
 - `telemetry_enabled` setting (default on). Set it `false` (e.g.
   `CORTEX_TELEMETRY_ENABLED=false`) to run without an OpenTelemetry collector:
   the trace/metric exporters are skipped entirely, so a local no-Docker run is
