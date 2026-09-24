@@ -14,6 +14,7 @@ from cortex.agent.executor import Executor
 from cortex.agent.loop import LATSLoop
 from cortex.agent.planner import Planner
 from cortex.agent.reflector import Reflector
+from cortex.agent.runnability import cannot_run_reply
 from cortex.config.settings import Settings
 from cortex.exceptions import CortexModelError
 from cortex.memory.manager import MemoryManager
@@ -153,6 +154,17 @@ class AgentKernel:
         state.messages.append(Message(role="user", content=state.user_input))
         if persist:
             await self._store(sid, "user", state.user_input)
+
+        canned = cannot_run_reply(state.user_input, history)
+        if canned is not None:
+            # "Run it" for a game, GUI or input() program: explain directly
+            # instead of letting the model paste the whole program again.
+            state.plan = ["Explain why this code can't run in the sandbox"]
+            await self._emit(event_queue, {"type": "plan", "steps": state.plan})
+            state.messages.append(Message(role="assistant", content=canned))
+            state.final_answer = canned
+            state.status = "complete"
+            return None
 
         started = time.monotonic()
         deadline = started + self._settings.max_run_seconds

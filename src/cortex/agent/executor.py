@@ -58,6 +58,11 @@ python_exec — never just show the code without running it.
 function), reply with the complete, working code in a code block plus a short \
 note on how to use it. Your tools are internal: never tell the user to call \
 python_exec or calculator, and never write code that calls them.
+- Some code cannot run in the sandbox: games and GUIs (pygame, tkinter), \
+anything that waits for keyboard input(), network or file access, or packages \
+outside the allowed modules. If asked to run such code, do not call python_exec \
+and do not paste the code again. In two or three sentences say it can't run \
+here and why, give the command to run it locally, and offer to save it to a file.
 - python_exec runs sandboxed Python. Always print() the result. You may import \
 math, json, random, statistics, itertools, functools, collections, datetime, re \
 and similar pure-Python modules. There is no file, network, os, sys, subprocess, \
