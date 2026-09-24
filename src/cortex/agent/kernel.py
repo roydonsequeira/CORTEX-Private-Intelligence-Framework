@@ -504,12 +504,15 @@ class AgentKernel:
         except Exception as exc:  # procedural memory is advisory, never fatal
             logger.warning("pattern_retrieval_failed", error=str(exc), session_id=sid)
             return []
-        return [
+        hints = [
             f"A similar task used these tools in order: "
             f"{', '.join(p.tool_sequence)} (took {p.avg_steps} step(s))."
             for p in patterns
             if p.success and p.tool_sequence
         ]
+        if hints:
+            logger.info("procedural_hints_used", session_id=sid, hints=hints)
+        return hints
 
     async def _record_pattern(self, user_input: str, state: AgentState, sid: str) -> None:
         """Persist the tool sequence of a successful run for future planner hints.
@@ -529,6 +532,7 @@ class AgentKernel:
                 success=True,
                 avg_steps=state.steps_taken,
             )
+            logger.info("procedural_pattern_saved", session_id=sid, tools=tool_sequence)
         except Exception as exc:  # learning is best-effort, never fatal to the run
             logger.warning("pattern_store_failed", error=str(exc), session_id=sid)
 

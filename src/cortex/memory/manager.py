@@ -114,7 +114,8 @@ class MemoryManager:
         Consolidation calls the model, so it never runs on the request path: the
         answer is returned immediately and facts are extracted afterwards.
         """
-        self._working.clear_session(session_id)
+        cleared = self._working.clear_session(session_id)
+        logger.info("working_memory_cleared", session_id=session_id, entries=cleared)
         if not self._consolidation_enabled:
             return
         task = asyncio.create_task(self._consolidate(session_id))
