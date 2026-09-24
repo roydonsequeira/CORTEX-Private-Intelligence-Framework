@@ -406,6 +406,29 @@ async def test_code_generation_plan_offers_no_tools() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_request_for_pygame_code_is_answered_without_the_model() -> None:
+    """'Run it' after a pygame game explains the sandbox limit instead of repasting code."""
+    kernel, router, registry = _make_kernel()
+    memory = cast(MagicMock, kernel._memory_manager)
+    memory.recent_history.return_value = [
+        Message(role="user", content="write a python code for snake game"),
+        Message(role="assistant", content="```python\nimport pygame\npygame.init()\n```"),
+    ]
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+    state = await kernel.run("run the code and send me the output", event_queue=queue)
+
+    assert state.status == "complete"
+    assert state.final_answer and "pip install pygame" in state.final_answer
+    router.complete.assert_not_awaited()
+    registry.execute.assert_not_awaited()
+    events = _drain(queue)
+    assert any(e["type"] == "plan" for e in events)
+    assert any(e["type"] == "token" for e in events)
+    memory.store_turn.assert_any_await(state.session_id, "assistant", state.final_answer)
+
+
+@pytest.mark.asyncio
 async def test_tool_plan_still_offers_tools() -> None:
     """A plan that needs a tool keeps the tool schemas."""
     kernel, router, registry = _make_kernel()
