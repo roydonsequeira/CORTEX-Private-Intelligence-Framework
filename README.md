@@ -109,7 +109,7 @@ All runtime configuration lives in `cortex.yaml` and can be overridden with `COR
 | `ollama_model` | `llama3.1:8b` | Fast model (FAST capability) |
 | `reasoning_model` | `deepseek-r1:8b` | Planner / LATS model (REASONING capability) |
 | `code_model` | `qwen2.5-coder:7b` | Code model (CODE capability) |
-| `embed_model` | `nomic-embed-text` | Embedding model |
+| `embed_model` | `nomic-embed-text` | Embedding model (the chat models above can all be set to one model; `qwen2.5:7b` gives the most reliable tool calling on a 6 GB GPU) |
 | `ollama_timeout_seconds` | `300` | Per-request Ollama timeout (covers a cold model load) |
 | `ollama_num_ctx` | `8192` | Context window pinned on every call |
 | `ollama_keep_alive` | `30m` | How long Ollama keeps the model loaded between requests |
@@ -175,8 +175,10 @@ CORTEX is designed to run on hardware you control, and its guardrails are built 
 - **Code execution** uses a pluggable sandbox backend selected by `code_sandbox`:
   - `restricted` (default) — compiled with RestrictedPython and run in a separate spawned process with a hard timeout. The attribute guard blocks dunder access and any traversal that would return a module object, closing escapes such as `json → codecs → sys → sys.modules['os']`. This is a best-effort in-process sandbox, **not** a guarantee against a determined adversary.
   - `container` — each snippet runs in an ephemeral Docker container with the network disabled, a read-only root filesystem, all Linux capabilities dropped, `no-new-privileges`, a tmpfs workdir, and CPU/memory/pid limits, so the OS process boundary is the real isolation layer. Use this for untrusted or multi-tenant workloads (`pip install 'cortex-agent[container]'`).
-- **Filesystem** access is confined to a configurable workspace root, rejects `..` traversal and absolute paths, enforces read/write size caps, and restricts writable extensions.
-- **Web fetch** honours `robots.txt`, caps response size, and fails closed to an offline message when the network is unavailable.
+- **Filesystem** access is confined to a configurable workspace root, rejects `..` traversal and absolute or system paths with a clear "access denied", enforces read/write size caps, and restricts writable extensions. Writes never overwrite an existing file unless `overwrite: true` is passed, and never touch hidden paths (`.git`, `.venv`, `.env`, `.cortex`). There is no delete capability.
+- **Prompt injection** is handled with least privilege rather than prompt wording alone: destructive requests are refused, content from files, documents and web pages is treated as untrusted data, and every tool call is schema-validated, time-limited and traced.
+- **Web fetch** honours `robots.txt`, verifies TLS against the operating system trust store, caps download and output size, and reports specific errors (HTTP status, timeout, offline).
+- **Calculator** evaluates an expression tree without `eval` and bounds exponents and factorials, so an expression like `9**9**9` cannot stall the API.
 - **API** requests are validated with Pydantic, rate limited per IP with a token bucket, and refused while the server drains for graceful shutdown. Authentication is off by default for localhost; set `api_key` (e.g. via `CORTEX_API_KEY`) to require a bearer token on every route except `/health` and the docs, and narrow `cors_origins` before exposing the API beyond your machine.
 
 Report security issues privately via a GitHub security advisory rather than a public issue.
@@ -194,17 +196,20 @@ flowchart TD
     procedural --> planner[Planner Hints]
 ```
 
+| Tier | Stored in | Holds |
+|---|---|---|
+| Working | process memory | scratchpad for the current request |
+| Episodic | SQLite, `.cortex/cortex.db` (table `episodes`) | every user message, tool result and answer, per session |
+| Semantic | ChromaDB, `.cortex/chroma` (collection `cortex_semantic`) | durable facts about the user and indexed document chunks, as embeddings |
+| Procedural | ChromaDB, `.cortex/chroma` (collection `cortex_procedural`) | tool sequences that solved past tasks, used as planner hints |
+
+Each request replays the session's recent exchanges from SQLite and retrieves relevant long-term facts from ChromaDB. After the answer, a background step extracts durable facts about the user; facts are keyed by their content, so re-learning one updates it rather than duplicating it. Everything stays on disk under `.cortex/`: inspect it with `GET /memory/sessions` and `GET /memory/search`, and clear it with `cortex reset-memory --yes`.
+
 ## Observability
 
-CORTEX exports OpenTelemetry spans for HTTP requests, agent planning/execution/reflection, Ollama calls, SQLite memory, Chroma memory, tool execution, LATS, supervisor workers, and web fetches.
+CORTEX exports OpenTelemetry spans for HTTP requests, agent planning/execution/reflection, Ollama calls, SQLite memory, Chroma memory, tool execution, LATS, supervisor workers, and web fetches, plus metrics for model latency and agent steps. Logs are structured JSON with a request ID on every line.
 
-Jaeger is available at `http://localhost:16686`.
-
-Screenshot placeholder:
-
-```
-docs/assets/jaeger-trace-placeholder.png
-```
+With the Docker stack, traces appear in Jaeger at `http://localhost:16686`. Running natively without a collector, set `telemetry_enabled: false`.
 
 ## API Examples
 
@@ -228,6 +233,16 @@ See [DEMO.md](DEMO.md) for reproducible examples.
 | Phase 5 | Next.js operator UI | Complete |
 | Phase 6 | LATS and supervisor multi-agent orchestration | Complete |
 | Phase 7 | Observability, hardening, docs, release | Complete |
+
+## Testing
+
+```bash
+pytest                 # 132 unit and integration tests (the model is mocked)
+pytest -m ollama       # live tests against a running Ollama
+ruff check src tests && mypy src   # lint and strict type checking
+```
+
+CI runs lint, tests, the UI build and the Docker build on every pull request. Each reliability bug found by running CORTEX against a live model has a regression test.
 
 ## Roadmap
 
