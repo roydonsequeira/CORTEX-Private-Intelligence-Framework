@@ -53,7 +53,7 @@ export function useAgentStream(initialSessionId: string | null = null): StreamSt
           signal: controller.signal
         });
         if (!response.ok || !response.body) {
-          throw new Error(`Stream failed: ${response.status}`);
+          throw new Error(httpErrorMessage(response.status));
         }
         await parseSse(response.body, (event) => {
           append(event);
@@ -78,6 +78,22 @@ export function useAgentStream(initialSessionId: string | null = null): StreamSt
   );
 
   return { events, isStreaming, error, sessionId, sendMessage, reset };
+}
+
+function httpErrorMessage(status: number): string {
+  switch (status) {
+    case 422:
+      return "CORTEX could not accept that message: it must be 1 to 8,192 characters.";
+    case 429:
+      return "Too many requests. Wait a few seconds and try again.";
+    case 401:
+    case 403:
+      return "The CORTEX API refused the request (API key or origin not allowed).";
+    case 503:
+      return "CORTEX is busy or restarting. Try again in a moment.";
+    default:
+      return `The CORTEX API returned an error (HTTP ${status}).`;
+  }
 }
 
 async function parseSse(

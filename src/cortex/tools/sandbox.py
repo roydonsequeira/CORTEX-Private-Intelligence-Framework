@@ -205,6 +205,8 @@ def _sandbox_worker(code: str, queue: Any) -> None:
 
 
 _REPL_VALUE_NAME = "cortex_repl_value"
+# (variable name, value) of a trailing ``result = ...`` assignment.
+_REPL_ASSIGNED_NAME = "cortex_repl_assigned"
 _NO_OUTPUT_MESSAGE = (
     "(code ran successfully but produced no output — use print() to show results)"
 )
@@ -218,7 +220,9 @@ def _run_code(code: str) -> str:
     dicts, ``def f(): ...`` then ``f()`` raises "name 'f' is not defined").
 
     Like a REPL, a bare expression on the last line (``fibonacci(20)``) has its
-    value reported — LLM-written snippets routinely forget to ``print`` it.
+    value reported — LLM-written snippets routinely forget to ``print`` it. A
+    snippet that prints nothing and ends in an assignment (``result = 2**100 // 3``)
+    reports that variable, so the model never has to guess a value it did not see.
     """
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", SyntaxWarning)
@@ -243,7 +247,10 @@ def _run_code(code: str) -> str:
     value = namespace.get(_REPL_VALUE_NAME)
     if value is not None:
         parts.append(value if isinstance(value, str) else repr(value))
-    output = "\n".join(parts).strip()
+    assigned = namespace.get(_REPL_ASSIGNED_NAME)
+    if not parts and isinstance(assigned, tuple) and assigned[1] is not None:
+        parts.append(f"{assigned[0]} = {assigned[1]!r}")
+    output ="\n".join(parts).strip()
     return output or _NO_OUTPUT_MESSAGE
 
 
@@ -257,6 +264,14 @@ def _capture_last_expression(code: str) -> str | ast.Module:
         tree = ast.parse(code)
     except SyntaxError:
         return code
+    if tree.body and isinstance(tree.body[-1], ast.Assign | ast.AugAssign):
+        target = _single_name_target(tree.body[-1])
+        if target is None:
+            return code
+        capture = ast.parse(f"{_REPL_ASSIGNED_NAME} = ({target!r}, {target})").body[0]
+        tree.body.append(ast.copy_location(capture, tree.body[-1]))
+        ast.fix_missing_locations(tree)
+        return tree
     if not tree.body or not isinstance(tree.body[-1], ast.Expr):
         return code
     last = tree.body[-1]
@@ -275,6 +290,17 @@ def _capture_last_expression(code: str) -> str | ast.Module:
     )
     ast.fix_missing_locations(tree)
     return tree
+
+
+def _single_name_target(statement: ast.stmt) -> str | None:
+    """The variable name a simple assignment binds (``x = ...``, ``x += ...``), else None."""
+    if isinstance(statement, ast.Assign):
+        targets = statement.targets
+        if len(targets) == 1 and isinstance(targets[0], ast.Name):
+            return targets[0].id
+        return None
+    target = statement.target if isinstance(statement, ast.AugAssign) else None
+    return target.id if isinstance(target, ast.Name) else None
 
 
 # Pure-computation stdlib modules the sandbox permits `import` for. None of these

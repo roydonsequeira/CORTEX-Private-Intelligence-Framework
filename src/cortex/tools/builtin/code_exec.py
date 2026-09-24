@@ -1,5 +1,6 @@
 """Python execution tool — delegates to a pluggable CodeSandbox backend."""
 
+import ast
 import time
 
 from cortex.config.settings import Settings
@@ -49,7 +50,7 @@ class CodeExecutionTool(BaseTool):
     async def execute(self, **kwargs: object) -> ToolResult:
         """Run the submitted code in the configured sandbox backend."""
         start = time.monotonic()
-        code = str(kwargs["code"])
+        code = _repair_escaped_newlines(str(kwargs["code"]))
         result = await self._sandbox.run(code, self._timeout_seconds)
         if result.success:
             return ToolResult(
@@ -59,6 +60,32 @@ class CodeExecutionTool(BaseTool):
                 execution_time_ms=(time.monotonic() - start) * 1000,
             )
         return _error(result.error or "Code execution failed.", start)
+
+
+def _repair_escaped_newlines(code: str) -> str:
+    """Undo double escaping that small models put in tool-call JSON.
+
+    Seen: code sent with a literal backslash-n instead of each line break, and
+    with escaped quotes (name = \\"Roydon\\"), both SyntaxErrors. Code that
+    already parses is never changed, so escapes inside string literals
+    (print("a\\nb")) are safe; a repair is used only if the result parses.
+    """
+    if "\\" not in code:
+        return code
+    try:
+        ast.parse(code)
+        return code
+    except SyntaxError:
+        pass
+    newlines = code.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+    quotes = newlines.replace('\\"', '"').replace("\\'", "'")
+    for repaired in (newlines, quotes):
+        try:
+            ast.parse(repaired)
+        except SyntaxError:
+            continue
+        return repaired
+    return code
 
 
 def _truncate(output: str) -> str:

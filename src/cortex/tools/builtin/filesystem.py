@@ -16,6 +16,23 @@ _MAX_WRITE_BYTES = 524_288
 _WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:(/|$)")
 
 
+def infer_action(kwargs: dict[str, object]) -> str:
+    """The requested action, inferred when the model left it out.
+
+    Seen: {"path": "notes.txt", "content": "x"} and {"path": "C:/.../hosts"} with
+    no action, which failed validation and left the model asking the user which
+    action to use. Content means a write; a directory-like path means a listing.
+    """
+    if kwargs.get("action"):
+        return str(kwargs["action"])
+    if "content" in kwargs:
+        return "write_file"
+    path = str(kwargs.get("path", "")).strip()
+    if path in ("", ".", "./", "/") or path.endswith(("/", "\\")):
+        return "list_directory"
+    return "read_file"
+
+
 class FileSystemTool(BaseTool):
     """Read, write, and list files under a constrained workspace root."""
 
@@ -37,7 +54,8 @@ class FileSystemTool(BaseTool):
                 "content": {"type": "string"},
                 "overwrite": {"type": "boolean"},
             },
-            "required": ["action", "path"],
+            # Models often omit `action`; it is inferred (see infer_action).
+            "required": ["path"],
             "additionalProperties": False,
         },
     )
@@ -60,7 +78,7 @@ class FileSystemTool(BaseTool):
     async def execute(self, **kwargs: object) -> ToolResult:
         """Execute a filesystem action with path validation at point of use."""
         start = time.monotonic()
-        action = str(kwargs["action"])
+        action = infer_action(kwargs)
         try:
             path = self._resolve_path(str(kwargs["path"]))
             if action == "read_file":
@@ -104,7 +122,10 @@ class FileSystemTool(BaseTool):
             cleaned = relative
         candidate = Path(cleaned)
         if ".." in candidate.parts:
-            raise OSError("Path must be relative and must not contain '..'.")
+            raise OSError(
+                "Access denied: paths must stay inside the CORTEX workspace and must not "
+                "contain '..'. Files outside the workspace cannot be read or written."
+            )
         # Checked textually as well: on Linux, Path("C:/Windows") has no drive and
         # is not absolute, so a Windows-style path would otherwise be treated as a
         # relative folder named "C:" instead of being denied.

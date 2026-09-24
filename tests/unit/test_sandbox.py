@@ -222,7 +222,7 @@ async def test_restricted_sandbox_does_not_leak_loop_underscore() -> None:
 @pytest.mark.asyncio
 async def test_restricted_sandbox_explains_empty_output() -> None:
     """Code that prints nothing says so instead of returning an empty string."""
-    result = await RestrictedSandbox().run("x = 1", timeout_seconds=10.0)
+    result = await RestrictedSandbox().run("def f():\n    return 1", timeout_seconds=10.0)
     assert result.success is True
     assert "print()" in result.output
 
@@ -235,3 +235,12 @@ async def test_restricted_sandbox_blocks_module_writes_and_getattr_escape() -> N
     escape = await RestrictedSandbox().run("getattr(json, 'codecs')", timeout_seconds=10.0)
     assert escape.success is False
     assert "not permitted" in (escape.error or "")
+
+
+def test_trailing_assignment_is_reported_when_nothing_printed() -> None:
+    """`result = 2**100 // 3` reports the value instead of 'no output'."""
+    from cortex.tools.sandbox import _run_code
+
+    assert _run_code("result = 2**100 // 3") == "result = 422550200076076467165567735125"
+    assert _run_code("x = 5\nx += 2") == "x = 7"
+    assert _run_code("print(1)\ny = 3") == "1"  # printed output wins

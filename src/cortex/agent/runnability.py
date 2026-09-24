@@ -16,6 +16,16 @@ _RUN_REQUEST = re.compile(r"\b(run|execute|exec|output)\b", re.IGNORECASE)
 _CODE_BLOCK = re.compile(r"```(?:python|py)?[ \t]*\n(.*?)(?:```|\Z)", re.DOTALL | re.IGNORECASE)
 _IMPORT = re.compile(r"^\s*(?:from|import)\s+([A-Za-z_]\w*)", re.MULTILINE)
 _GUI_MODULES = {"tkinter", "turtle", "curses"}
+# Import names whose pip package is named differently.
+_PIP_NAMES = {
+    "bs4": "beautifulsoup4",
+    "cv2": "opencv-python",
+    "PIL": "pillow",
+    "sklearn": "scikit-learn",
+    "yaml": "pyyaml",
+    "dotenv": "python-dotenv",
+    "dateutil": "python-dateutil",
+}
 _MAX_REQUEST_CHARS = 200
 _INPUT_REASON = "it waits for you to type input, and the sandbox has no keyboard"
 
@@ -71,7 +81,7 @@ def _blockers(code: str) -> tuple[list[str], list[str]]:
             blocked_stdlib.append(module)
         else:
             reasons.append(f"it needs the `{module}` package, which isn't available in the sandbox")
-            packages.append(module)
+            packages.append(_PIP_NAMES.get(module, module))
     if re.search(r"\binput\s*\(", code):
         reasons.append(_INPUT_REASON)
     if blocked_stdlib and not reasons:

@@ -307,3 +307,134 @@ async def test_executor_does_not_retry_deterministic_failures() -> None:
     result = await Executor()._execute_with_retry("python_exec", registry, code="x=")
     assert result.success is False
     assert registry.execute.await_count == 1
+
+
+class _FakeSemanticMemory:
+    """Stores entries in a list; retrieve returns them all (no embeddings)."""
+
+    def __init__(self) -> None:
+        self.entries: dict[str, object] = {}
+
+    async def store(self, entry: object) -> str:
+        self.entries[entry.id] = entry  # type: ignore[attr-defined]
+        return entry.id  # type: ignore[attr-defined,no-any-return]
+
+    async def retrieve(self, query: object) -> list[object]:
+        return list(self.entries.values())
+
+
+@pytest.mark.asyncio
+async def test_doc_search_with_path_indexes_that_document_first(tmp_path: Path) -> None:
+    """'Search README.md for X' works even when the model skipped index_document."""
+    from cortex.tools.builtin.doc_search import DocumentSearchTool
+
+    (tmp_path / "README.md").write_text("Memory tiers: working, episodic, semantic.")
+    (tmp_path / "other.md").write_text("Unrelated notes about lunch.")
+    memory = _FakeSemanticMemory()
+    tool = DocumentSearchTool(memory, allowed_root=tmp_path)  # type: ignore[arg-type]
+    await tool.execute(action="index_document", path="other.md")
+
+    result = await tool.execute(action="search", query="memory tiers", path="README.md")
+
+    assert result.success is True
+    assert "episodic" in result.output
+    assert "lunch" not in result.output  # results are limited to the named document
+
+
+@pytest.mark.asyncio
+async def test_doc_search_index_with_query_also_searches(tmp_path: Path) -> None:
+    """index_document with a query returns the top matches in the same call."""
+    from cortex.tools.builtin.doc_search import DocumentSearchTool
+
+    (tmp_path / "README.md").write_text("The sandbox runs code in a separate process.")
+    tool = DocumentSearchTool(_FakeSemanticMemory(), allowed_root=tmp_path)  # type: ignore[arg-type]
+
+    result = await tool.execute(action="index_document", path="README.md", query="sandbox")
+
+    assert result.success is True
+    assert result.output.startswith("Indexed 1 chunks.")
+    assert "separate process" in result.output
+
+
+@pytest.mark.asyncio
+async def test_python_exec_repairs_double_escaped_newlines() -> None:
+    """Code sent with literal backslash-n line breaks still runs."""
+    code = "def f(a, b):" + "\n" + "    return a + b" + "\n" + "print(f(1, 2))"
+    result = await CodeExecutionTool().execute(code=code)
+    assert result.success is True
+    assert result.output == "3"
+
+
+def test_escape_repair_leaves_valid_code_alone() -> None:
+    """A real escape inside a string literal is not touched."""
+    from cortex.tools.builtin.code_exec import _repair_escaped_newlines
+
+    code = 'print("a' + "\n" + 'b")'
+    assert _repair_escaped_newlines(code) == code
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:8000/health",
+        "http://localhost:11434/api/tags",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://192.168.1.1/",
+        "http://[::1]/",
+    ],
+)
+async def test_web_fetch_refuses_local_and_private_hosts(url: str) -> None:
+    """web_fetch cannot be turned against this machine or the local network (SSRF)."""
+    tool = WebFetchTool()
+    get = AsyncMock()
+    with patch.object(tool._client, "get", new=get):
+        result = await tool.execute(url=url)
+    await tool.aclose()
+    assert result.success is False
+    assert "local or private network" in (result.error or "")
+    get.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_refuses_redirect_to_a_private_host() -> None:
+    """A public page that redirects to localhost is not followed."""
+    tool = WebFetchTool()
+    request = httpx.Request("GET", "https://93.184.215.14/page")
+    robots = httpx.Response(404, text="", request=request)
+    redirect = httpx.Response(302, headers={"location": "http://127.0.0.1:8000/"}, request=request)
+    with patch.object(tool._client, "get", new=AsyncMock(side_effect=[robots, redirect])):
+        result = await tool.execute(url="https://93.184.215.14/page")
+    await tool.aclose()
+    assert result.success is False
+    assert "redirect target" in (result.error or "")
+
+
+def test_filesystem_infers_a_missing_action() -> None:
+    """Models often omit `action`; content means write, a folder path means list."""
+    from cortex.tools.builtin.filesystem import infer_action
+
+    assert infer_action({"path": "notes.txt", "content": "x"}) == "write_file"
+    assert infer_action({"path": "."}) == "list_directory"
+    assert infer_action({"path": "README.md"}) == "read_file"
+    assert infer_action({"action": "file_exists", "path": "a.txt"}) == "file_exists"
+
+
+@pytest.mark.asyncio
+async def test_filesystem_without_action_reads_the_file(tmp_path: Path) -> None:
+    """{"path": ...} alone passes validation and reads the file."""
+    (tmp_path / "a.txt").write_text("hello")
+    registry = ToolRegistry()
+    registry.register(FileSystemTool(allowed_root=tmp_path))
+    result = await registry.execute("filesystem", path="a.txt")
+    assert result.success is True
+    assert result.output == "hello"
+
+
+@pytest.mark.asyncio
+async def test_python_exec_repairs_escaped_quotes() -> None:
+    """name = \\"Roydon\\" (escaped quotes, escaped newlines) still runs."""
+    code = 'name = \\"Roydon\\"' + "\n" + "print(name[::-1])"
+    result = await CodeExecutionTool().execute(code=code)
+    assert result.success is True
+    assert result.output == "nodyoR"
