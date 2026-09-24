@@ -24,7 +24,12 @@ async def search_memory(
     types: str = "semantic,episodic",
     top_k: int = Query(10, ge=1, le=50),
 ) -> dict[str, Any]:
-    """Search episodic and/or semantic memory."""
+    """Search episodic, semantic and/or procedural memory.
+
+    ``types`` defaults to episodic + semantic (what the UI shows). Add
+    ``procedural`` to see learned tool patterns. Working memory is not searchable
+    here: it only exists while a request runs and is cleared when it ends.
+    """
     requested = {item.strip() for item in types.split(",") if item.strip()}
     results = []
     if "episodic" in requested:
@@ -35,6 +40,11 @@ async def search_memory(
     if "semantic" in requested:
         entries = await request.app.state.semantic_memory.retrieve(
             MemoryQuery(text=q, top_k=top_k, memory_types=["semantic"])
+        )
+        results.extend(entries)
+    if "procedural" in requested:
+        entries = await request.app.state.procedural_memory.retrieve(
+            MemoryQuery(text=q, top_k=top_k, memory_types=["procedural"])
         )
         results.extend(entries)
     return {"results": [entry.model_dump(mode="json") for entry in results[:top_k]]}
