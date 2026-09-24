@@ -122,7 +122,10 @@ class FileSystemTool(BaseTool):
             cleaned = relative
         candidate = Path(cleaned)
         if ".." in candidate.parts:
-            raise OSError("Path must be relative and must not contain '..'.")
+            raise OSError(
+                "Access denied: paths must stay inside the CORTEX workspace and must not "
+                "contain '..'. Files outside the workspace cannot be read or written."
+            )
         # Checked textually as well: on Linux, Path("C:/Windows") has no drive and
         # is not absolute, so a Windows-style path would otherwise be treated as a
         # relative folder named "C:" instead of being denied.
