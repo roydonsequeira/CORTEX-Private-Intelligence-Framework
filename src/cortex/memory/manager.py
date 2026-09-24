@@ -151,10 +151,12 @@ class MemoryManager:
         )
 
     async def retrieve_tool_patterns(
-        self, task: str, top_k: int = 3
+        self, task: str, top_k: int = 3, min_relevance: float = 0.0
     ) -> list[ToolPattern]:
         """Return learned tool-use patterns for similar tasks."""
-        return await self._procedural.retrieve_patterns(task, top_k=top_k)
+        return await self._procedural.retrieve_patterns(
+            task, top_k=top_k, min_relevance=min_relevance
+        )
 
 
 def _clip(text: str, limit: int) -> str:

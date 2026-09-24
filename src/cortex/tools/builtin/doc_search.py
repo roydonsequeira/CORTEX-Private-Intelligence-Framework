@@ -143,7 +143,13 @@ class DocumentSearchTool(BaseTool):
 
 
 def _chunk_document(content: str, chunk_size: int, overlap: int) -> list[str]:
-    """Split text on paragraph boundaries first, then character limits with overlap."""
+    """Split text on paragraph boundaries first, then character limits with overlap.
+
+    Line endings are normalised first: a CRLF file (the Windows default) has no
+    "\\n\\n" separators, so it would be cut into blind fixed-size windows that
+    split sentences and tables mid-way, badly hurting retrieval.
+    """
+    content = content.replace("\r\n", "\n").replace("\r", "\n")
     paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
     chunks: list[str] = []
     current = ""

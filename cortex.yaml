@@ -1,13 +1,34 @@
+# CORTEX configuration. Every key can be overridden with a CORTEX_<KEY>
+# environment variable (lists and nested blocks as JSON), e.g.
+#   CORTEX_OLLAMA_MODEL=llama3.1:8b   CORTEX_API_KEY=change-me
+# Run `cortex doctor` after editing to check the setup.
+
+# --- Models (served by Ollama) ----------------------------------------------
 ollama_base_url: http://localhost:11434
-ollama_model: llama3.1:8b
+# One tool-capable model for every chat role: a single `ollama pull`.
+ollama_model: qwen2.5:7b
+reasoning_model: qwen2.5:7b
+code_model: qwen2.5:7b
 embed_model: nomic-embed-text
+
+# --- Storage (created on first run; wipe with `cortex reset-memory --yes`) --
 chroma_path: ./.cortex/chroma
 db_path: ./.cortex/cortex.db
-api_host: 0.0.0.0
+
+# --- API ----------------------------------------------------------------------
+# Loopback only by default: the agent can run code and read/write workspace
+# files. To expose it, set api_host, api_key, allowed_hosts and cors_origins.
+api_host: 127.0.0.1
 api_port: 8000
 log_level: INFO
+
+# --- Observability ------------------------------------------------------------
+# Off for native runs (no collector). The Docker stack turns it on for Jaeger.
+telemetry_enabled: false
 otel_endpoint: http://localhost:4317
-max_agent_steps: 20
+
+# --- Agent and tools ----------------------------------------------------------
+max_agent_steps: 10
 plugins_dir: ./src/cortex/tools/plugins
 allowed_root: .
 allowed_write_extensions:

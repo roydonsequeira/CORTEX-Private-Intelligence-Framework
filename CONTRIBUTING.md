@@ -2,6 +2,25 @@
 
 Thanks for helping improve CORTEX. This project aims to be a reference implementation for local, private AI agents, so contributions should be typed, tested, observable, and easy to review.
 
+## Development Setup
+
+```bash
+git clone https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework.git
+cd CORTEX-Private-Intelligence-Framework
+python -m venv .venv
+source .venv/bin/activate            # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
+pip install pre-commit && pre-commit install   # optional: ruff and mypy on commit
+
+ollama pull qwen2.5:7b && ollama pull nomic-embed-text
+cortex doctor                        # verify the setup
+cortex serve                         # API on http://localhost:8000
+cd ui && npm install && npm run dev  # UI on http://localhost:3000
+```
+
+Unit and integration tests mock the model, so they run without Ollama. Live
+tests against a real model are opt-in: `pytest -m ollama`.
+
 ## Code Style
 
 - Python code must pass `ruff` and `mypy` with no exceptions.

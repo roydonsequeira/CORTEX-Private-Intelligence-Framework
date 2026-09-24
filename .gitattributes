@@ -1,0 +1,6 @@
+# Normalise line endings in the repository; check scripts out with LF on every
+# platform so they run under bash (a CRLF shebang/`set` line fails).
+* text=auto
+*.sh text eol=lf
+Makefile text eol=lf
+Dockerfile text eol=lf

@@ -120,6 +120,10 @@ class OllamaProvider:
         self._base_url = _prefer_ipv4_loopback(base_url.rstrip("/"))
         self._num_ctx = num_ctx
         self._keep_alive = keep_alive
+        # Models Ollama rejected with "does not support tools" (e.g. gemma3,
+        # deepseek-r1). They are called without tools from then on, so the agent
+        # still answers — directly — instead of failing every request.
+        self._no_tool_models: set[str] = set()
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
             timeout=httpx.Timeout(timeout, connect=10.0),
@@ -184,6 +188,8 @@ class OllamaProvider:
     ) -> ModelResponse:
         """Call the Ollama /api/chat endpoint and return a normalised ModelResponse."""
         cfg = config or GenerationConfig()
+        if model in self._no_tool_models:
+            tools = None
         payload = self._payload(model, messages, cfg, tools, stream=False)
 
         start = time.monotonic()
@@ -194,6 +200,8 @@ class OllamaProvider:
                 response = await self._client.post("/api/chat", json=payload)
                 response.raise_for_status()
             except httpx.HTTPError as exc:
+                if tools and self._mark_if_tools_unsupported(exc, model):
+                    return await self.complete(model, messages, config, None)
                 raise CortexModelError(self._describe_error(exc, model)) from exc
 
             latency = (time.monotonic() - start) * 1000
@@ -227,7 +235,10 @@ class OllamaProvider:
         chunks and are surfaced verbatim so the caller can still route tool use.
         """
         cfg = config or GenerationConfig()
+        if model in self._no_tool_models:
+            tools = None
         payload = self._payload(model, messages, cfg, tools, stream=True)
+        retry_without_tools = False
 
         start = time.monotonic()
         with _tracer.start_as_current_span("ollama.stream_complete") as span:
@@ -270,7 +281,28 @@ class OllamaProvider:
                             model=data.get("model", model),
                         )
             except httpx.HTTPError as exc:
-                raise CortexModelError(self._describe_error(exc, model)) from exc
+                # Ollama rejects a tools request before streaming anything, so it
+                # is safe to retry the whole call without tools.
+                if not (tools and self._mark_if_tools_unsupported(exc, model)):
+                    raise CortexModelError(self._describe_error(exc, model)) from exc
+                retry_without_tools = True
+        if retry_without_tools:
+            async for chunk in self.stream_complete(model, messages, config, None):
+                yield chunk
+
+    def _mark_if_tools_unsupported(self, exc: httpx.HTTPError, model: str) -> bool:
+        """Remember a model Ollama rejected for tool use; True if that was the error."""
+        if not isinstance(exc, httpx.HTTPStatusError) or exc.response.status_code != 400:
+            return False
+        if "does not support tools" not in _error_detail(exc.response):
+            return False
+        self._no_tool_models.add(model)
+        logger.warning(
+            "model_without_tool_support",
+            model=model,
+            fix="Answers will not use tools. Pick a tool-capable model (e.g. qwen2.5:7b).",
+        )
+        return True
 
     async def embed(self, model: str, text: str | list[str]) -> list[list[float]]:
         """Embed one or more texts using the specified model.

@@ -229,6 +229,75 @@ async def test_list_models_returns_names(provider: OllamaProvider) -> None:
     assert names == ["llama3.1:8b", "nomic-embed-text"]
 
 
+def _no_tools_error() -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "http://fake-ollama:11434/api/chat")
+    response = httpx.Response(
+        400,
+        json={"error": "registry.ollama.ai/library/gemma3:4b does not support tools"},
+        request=request,
+    )
+    return httpx.HTTPStatusError("400", request=request, response=response)
+
+
+@pytest.mark.asyncio
+async def test_model_without_tool_support_falls_back_to_no_tools(
+    provider: OllamaProvider,
+) -> None:
+    """A 'does not support tools' 400 is retried without tools, and remembered."""
+    rejected = MagicMock(spec=httpx.Response)
+    rejected.raise_for_status = MagicMock(side_effect=_no_tools_error())
+    accepted = MagicMock(spec=httpx.Response)
+    accepted.raise_for_status = MagicMock()
+    accepted.json.return_value = _make_chat_response("Hello without tools")
+    post_mock = AsyncMock(side_effect=[rejected, accepted, accepted])
+    tools = [{"type": "function", "function": {"name": "calculator"}}]
+
+    with patch.object(provider._client, "post", new=post_mock):
+        first = await provider.complete("gemma3:4b", [Message(role="user", content="Hi")], tools=tools)
+        await provider.complete("gemma3:4b", [Message(role="user", content="Hi")], tools=tools)
+
+    assert first.content == "Hello without tools"
+    payloads = [call.kwargs["json"] for call in post_mock.await_args_list]
+    assert "tools" in payloads[0]
+    assert "tools" not in payloads[1]
+    assert "tools" not in payloads[2]  # remembered: no second rejected attempt
+
+
+class _RejectingStreamContext:
+    """A streamed request Ollama rejects before sending any chunk."""
+
+    async def __aenter__(self) -> Any:
+        response = MagicMock()
+        response.is_error = True
+        response.aread = AsyncMock()
+        response.raise_for_status = MagicMock(side_effect=_no_tools_error())
+        return response
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+
+@pytest.mark.asyncio
+async def test_streaming_model_without_tool_support_falls_back(
+    provider: OllamaProvider,
+) -> None:
+    """The streaming path also retries without tools after a 'does not support tools' 400."""
+    ok_lines = [json.dumps({"model": "gemma3:4b", "message": {"content": "hi"}, "done": True})]
+    stream_mock = MagicMock(side_effect=[_RejectingStreamContext(), _FakeStreamContext(ok_lines)])
+    tools = [{"type": "function", "function": {"name": "calculator"}}]
+
+    with patch.object(provider._client, "stream", stream_mock):
+        chunks = [
+            chunk
+            async for chunk in provider.stream_complete(
+                "gemma3:4b", [Message(role="user", content="Hi")], tools=tools
+            )
+        ]
+
+    assert [c.content for c in chunks] == ["hi"]
+    assert "tools" not in stream_mock.call_args_list[1].kwargs["json"]
+
+
 def test_localhost_base_url_uses_ipv4_loopback() -> None:
     """localhost is rewritten to 127.0.0.1 (Windows' ::1-first lookup costs ~2s/connect)."""
     assert OllamaProvider("http://localhost:11434")._base_url == "http://127.0.0.1:11434"

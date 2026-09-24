@@ -6,7 +6,7 @@ services:
   ollama:
     image: ollama/ollama:latest
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     volumes:
       - ./ollama_data:/root/.ollama
     networks:
@@ -25,8 +25,8 @@ services:
   jaeger:
     image: jaegertracing/all-in-one:latest
     ports:
-      - "16686:16686"
-      - "4317:4317"
+      - "127.0.0.1:16686:16686"
+      - "127.0.0.1:4317:4317"
     networks:
       - cortex-net
 
@@ -35,12 +35,15 @@ services:
       context: ..
       dockerfile: Dockerfile
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       - CORTEX_OLLAMA_BASE_URL=http://ollama:11434
       - CORTEX_CHROMA_PATH=/app/.cortex/chroma
       - CORTEX_DB_PATH=/app/.cortex/cortex.db
       - CORTEX_OTEL_ENDPOINT=http://jaeger:4317
+      - CORTEX_TELEMETRY_ENABLED=true
+      # The UI server reaches the API as "cortex-api"; browsers use localhost.
+      - CORTEX_ALLOWED_HOSTS=["localhost", "127.0.0.1", "cortex-api"]
     depends_on:
       - ollama
       - jaeger
@@ -53,10 +56,12 @@ services:
     build:
       context: ../ui
       dockerfile: Dockerfile
+      args:
+        # Inlined into the browser bundle at build time by Next.js.
+        NEXT_PUBLIC_CORTEX_API_URL: http://localhost:8000
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
-      - NEXT_PUBLIC_CORTEX_API_URL=http://localhost:8000
       - CORTEX_API_URL=http://cortex-api:8000
     depends_on:
       - cortex-api

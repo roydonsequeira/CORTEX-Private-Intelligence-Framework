@@ -47,7 +47,7 @@ flowchart TB
     Tools --> Web["web_fetch"]
     Tools --> Doc["doc_search"]
 
-    Router --> Ollama["Ollama<br/>llama3.1 · deepseek-r1 · nomic-embed"]
+    Router --> Ollama["Ollama<br/>qwen2.5 · nomic-embed · any model"]
     API -. OTLP spans .-> Jaeger["Jaeger traces<br/>:16686"]
 ```
 
@@ -65,17 +65,40 @@ flowchart TB
 
 ## Quick Start
 
+**Prerequisites:** [Ollama](https://ollama.com), Python 3.12+, Node.js 20+ (for the UI). About 6 GB of disk for the default models; a GPU with 6 GB+ VRAM is recommended (CPU works, slowly).
+
+### Native (recommended for development)
+
 ```bash
 git clone https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework.git
 cd CORTEX-Private-Intelligence-Framework
-make up
-make pull-models
+ollama pull qwen2.5:7b && ollama pull nomic-embed-text
+
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -e .
+
+cortex doctor                      # checks Python, config, Ollama, models, port, HTTPS
+cortex serve                       # API on http://localhost:8000
+
+cd ui && npm install && npm run dev   # UI on http://localhost:3000 (second terminal)
+```
+
+### Docker Compose (NVIDIA GPU)
+
+Requires Docker with the NVIDIA Container Toolkit, plus `make`, `bash` and `curl`.
+
+```bash
+make up            # API, UI, Ollama and Jaeger
+make pull-models   # pulls qwen2.5:7b and nomic-embed-text into the Ollama container
 ```
 
 Open:
 - UI: http://localhost:3000
 - API docs: http://localhost:8000/docs
 - Jaeger traces: http://localhost:16686
+
+All ports are published on `127.0.0.1` only.
 
 ### Low-resource demo (no GPU)
 
@@ -86,18 +109,13 @@ make demo
 make pull-models-demo
 ```
 
-Same URLs as above. Answers are weaker than the full 8B stack — this shows the machinery (planning, streaming, tool calls, memory, tracing), not frontier-model quality. Warm the model with one query before presenting, since the first call loads it.
+Same URLs as above. Answers are weaker than the default 7B model — this shows the machinery (planning, streaming, tool calls, memory, tracing), not frontier-model quality. Warm the model with one query before presenting, since the first call loads it.
 
-### Running natively (no Docker)
+### The `cortex` command
 
-After `pip install -e .` in a virtual environment, use the `cortex` command. It runs inside the environment CORTEX is installed in, so it cannot accidentally pick up another Python's `uvicorn` from `PATH` (which fails with `No module named 'cortex'`):
+`cortex serve` runs uvicorn inside the environment CORTEX is installed in, so it cannot pick up another Python's `uvicorn` from `PATH` (which fails with `No module named 'cortex'`). It refuses to start on a busy port and warms the model in the background. `cortex doctor` checks the whole setup and prints the fix for anything wrong. `cortex reset-memory --yes` wipes stored memory for a clean start.
 
-```bash
-cortex doctor   # checks Python, cortex.yaml, Ollama, pulled models, data dirs, port, HTTPS
-cortex serve    # starts the API on http://localhost:8000 (warms the model in the background)
-```
-
-Without a Jaeger collector, set `telemetry_enabled: false` in `cortex.yaml` (or `CORTEX_TELEMETRY_ENABLED=false`) to skip trace/metric export. `cortex reset-memory --yes` wipes stored memory for a clean start.
+Telemetry export is off in the default `cortex.yaml` (no collector is running natively); the Docker stack turns it on for Jaeger.
 
 ## Configuration
 
@@ -106,27 +124,31 @@ All runtime configuration lives in `cortex.yaml` and can be overridden with `COR
 | Key | Default | Description |
 |---|---|---|
 | `ollama_base_url` | `http://localhost:11434` | Ollama server URL |
-| `ollama_model` | `llama3.1:8b` | Fast model (FAST capability) |
-| `reasoning_model` | `deepseek-r1:8b` | Planner / LATS model (REASONING capability) |
-| `code_model` | `qwen2.5-coder:7b` | Code model (CODE capability) |
-| `embed_model` | `nomic-embed-text` | Embedding model (the chat models above can all be set to one model; `qwen2.5:7b` gives the most reliable tool calling on a 6 GB GPU) |
+| `ollama_model` | `qwen2.5:7b` | Chat and tool-calling model (FAST capability) |
+| `reasoning_model` | `qwen2.5:7b` | Planner / LATS model (REASONING capability; the UI's Reasoning toggle) |
+| `code_model` | `qwen2.5:7b` | Code model (CODE capability) |
+| `embed_model` | `nomic-embed-text` | Embedding model |
 | `ollama_timeout_seconds` | `300` | Per-request Ollama timeout (covers a cold model load) |
 | `ollama_num_ctx` | `8192` | Context window pinned on every call |
 | `ollama_keep_alive` | `30m` | How long Ollama keeps the model loaded between requests |
 | `max_agent_steps` | `10` | ReAct step budget; at the limit CORTEX synthesizes a best-effort answer |
+| `max_run_seconds` | `120` | Wall-clock budget per request; past it CORTEX gives a best-effort answer |
 | `history_turns` | `6` | Prior turns of the session replayed into each request |
 | `chroma_path` | `./.cortex/chroma` | Local Chroma persistence path |
 | `db_path` | `./.cortex/cortex.db` | SQLite episodic memory path |
-| `api_host` / `api_port` | `0.0.0.0` / `8000` | FastAPI bind address |
+| `api_host` / `api_port` | `127.0.0.1` / `8000` | Bind address; loopback only by default |
 | `api_key` | `null` | When set, require `Authorization: Bearer <key>` on all routes except `/health` and docs |
-| `cors_origins` | `["*"]` | Allowed CORS origins; narrow this before exposing the API |
+| `cors_origins` | `["http://localhost:3000", "http://127.0.0.1:3000"]` | Browser origins allowed to call the API (the local UI) |
+| `allowed_hosts` | `["localhost", "127.0.0.1"]` | Accepted `Host` names (blocks DNS rebinding); add your host name to expose the API, or `["*"]` to disable |
+| `debug_tool_endpoint` | `false` | Enable `POST /tools/{name}/execute`, which runs a tool directly, bypassing the agent |
 | `task_store` | `memory` | Task result backend: `memory` (lost on restart) or `sqlite` (durable) |
 | `task_db_path` | `./.cortex/tasks.db` | SQLite path for the durable task store |
-| `telemetry_enabled` | `true` | Export OpenTelemetry traces/metrics; set `false` to run without a collector (no Jaeger) and no export warnings |
+| `telemetry_enabled` | `true` (`false` in the shipped `cortex.yaml`) | Export OpenTelemetry traces/metrics; `false` runs without a collector and without export warnings |
 | `otel_endpoint` | `http://localhost:4317` | OTLP gRPC endpoint |
 | `code_sandbox` | `restricted` | Code execution backend: `restricted` (in-process) or `container` (Docker isolation) |
 | `stream_tokens` | `true` | Stream final-answer tokens from Ollama as they generate |
 | `procedural_memory_enabled` | `true` | Learn tool-use patterns and feed them to the planner |
+| `procedural_min_relevance` | `0.6` | Only patterns from near-duplicate past tasks become planner hints |
 | `lats.enabled` | `false` | Enable LATS globally |
 | `lats.max_depth` | `5` | LATS tree depth |
 | `lats.n_branches` | `3` | LATS branch factor |
@@ -172,11 +194,13 @@ Drop the file in `src/cortex/tools/plugins/` and restart CORTEX.
 
 CORTEX is designed to run on hardware you control, and its guardrails are built for that threat model — chiefly to contain code the LLM generates when a prompt is malicious or injected.
 
+- **Network exposure** is closed by default: the API binds to `127.0.0.1`, accepts browser calls only from the local UI's origin (CORS), and only under local host names (a `Host` check that blocks DNS-rebinding attacks from web pages). The Docker stack publishes every port on `127.0.0.1`. To expose CORTEX, set `api_key` and widen `api_host`, `allowed_hosts` and `cors_origins` deliberately; `cortex serve` warns if you bind beyond loopback without a key. Direct tool execution (`POST /tools/{name}/execute`) is disabled unless `debug_tool_endpoint` is set.
+
 - **Code execution** uses a pluggable sandbox backend selected by `code_sandbox`:
   - `restricted` (default) — compiled with RestrictedPython and run in a separate spawned process with a hard timeout. The attribute guard blocks dunder access and any traversal that would return a module object, closing escapes such as `json → codecs → sys → sys.modules['os']`. This is a best-effort in-process sandbox, **not** a guarantee against a determined adversary.
   - `container` — each snippet runs in an ephemeral Docker container with the network disabled, a read-only root filesystem, all Linux capabilities dropped, `no-new-privileges`, a tmpfs workdir, and CPU/memory/pid limits, so the OS process boundary is the real isolation layer. Use this for untrusted or multi-tenant workloads (`pip install 'cortex-agent[container]'`).
 - **Filesystem** access is confined to a configurable workspace root, rejects `..` traversal and absolute or system paths with a clear "access denied", enforces read/write size caps, and restricts writable extensions. Writes never overwrite an existing file unless `overwrite: true` is passed, and never touch hidden paths (`.git`, `.venv`, `.env`, `.cortex`). There is no delete capability.
-- **Prompt injection** is handled with least privilege rather than prompt wording alone: destructive requests are refused, content from files, documents and web pages is treated as untrusted data, and every tool call is schema-validated, time-limited and traced.
+- **Prompt injection** is handled with least privilege rather than prompt wording alone: destructive requests are refused, and when the plan is a direct answer or a refusal the model is given no tools at all; at most three tool calls run per step; content from files, documents and web pages is treated as untrusted data; and every tool call is schema-validated, time-limited and traced.
 - **Web fetch** honours `robots.txt`, verifies TLS against the operating system trust store, caps download and output size, and reports specific errors (HTTP status, timeout, offline).
 - **Calculator** evaluates an expression tree without `eval` and bounds exponents and factorials, so an expression like `9**9**9` cannot stall the API.
 - **API** requests are validated with Pydantic, rate limited per IP with a token bucket, and refused while the server drains for graceful shutdown. Authentication is off by default for localhost; set `api_key` (e.g. via `CORTEX_API_KEY`) to require a bearer token on every route except `/health` and the docs, and narrow `cors_origins` before exposing the API beyond your machine.

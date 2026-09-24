@@ -70,13 +70,23 @@ class ProceduralMemory(BaseMemory):
             )
         )
 
-    async def retrieve_patterns(self, task: str, top_k: int = 3) -> list[ToolPattern]:
-        """Retrieve tool patterns for similar past tasks."""
+    async def retrieve_patterns(
+        self, task: str, top_k: int = 3, min_relevance: float = 0.0
+    ) -> list[ToolPattern]:
+        """Retrieve tool patterns for similar past tasks.
+
+        ``min_relevance`` (1 / (1 + distance)) drops loosely related tasks: with
+        nomic-embed-text, near-duplicate tasks score ~0.63-0.78 while unrelated
+        ones score <= ~0.56, and hinting from unrelated tasks steers the planner
+        toward tools it does not need.
+        """
         entries = await self.retrieve(
             MemoryQuery(text=task, top_k=top_k, memory_types=["procedural"])
         )
         patterns: list[ToolPattern] = []
         for entry in entries:
+            if float(entry.metadata.get("relevance_score", 1.0)) < min_relevance:
+                continue
             raw_sequence = entry.metadata.get("tool_sequence", "[]")
             if isinstance(raw_sequence, str):
                 try:
@@ -155,9 +165,12 @@ def _entries_from_query_result(result: dict[str, Any]) -> list[MemoryEntry]:
     ids = result.get("ids", [[]])[0]
     documents = result.get("documents", [[]])[0]
     metadatas = result.get("metadatas", [[]])[0]
+    distances = result.get("distances", [[]])[0] if result.get("distances") else []
     entries: list[MemoryEntry] = []
     for idx, entry_id in enumerate(ids):
         metadata = dict(metadatas[idx] or {})
+        if idx < len(distances):
+            metadata["relevance_score"] = 1.0 / (1.0 + float(distances[idx]))
         timestamp = datetime.fromisoformat(
             str(metadata.pop("timestamp", datetime.now(UTC).isoformat()))
         )

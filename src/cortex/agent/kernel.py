@@ -1,6 +1,8 @@
 """AgentKernel — main orchestrator. Stateless per-call; no shared mutable instance state."""
 
 import asyncio
+import re
+import time
 import uuid
 from typing import Any, Literal
 
@@ -47,6 +49,8 @@ class AgentState(BaseModel):
     tool_history: dict[str, str] = Field(default_factory=dict, exclude=True)
     repeated_calls: int = Field(default=0, exclude=True)
     stalled: bool = Field(default=False, exclude=True)
+    # The planner saw procedural-memory hints for this run.
+    hinted: bool = Field(default=False, exclude=True)
 
 
 class AgentKernel:
@@ -150,15 +154,25 @@ class AgentKernel:
         if persist:
             await self._store(sid, "user", state.user_input)
 
+        started = time.monotonic()
+        deadline = started + self._settings.max_run_seconds
         state.status = "planning"
         hints = await self._retrieve_pattern_hints(state.user_input, sid)
+        state.hinted = bool(hints)
         try:
-            tool_names = [s.name for s in self._tool_registry.list_tools()]
-            state.plan = await self._planner.decompose(
-                state.user_input,
-                tool_names,
-                hints=hints,
-                conversation=_format_history(history),
+            # Name plus a short description, so the planner knows what each tool
+            # can and cannot do (e.g. that filesystem has no delete action).
+            tools = [
+                f"{schema.name} ({schema.description.split('.')[0].strip()})"
+                for schema in self._tool_registry.list_tools()
+            ]
+            state.plan = _refuse_destructive_plan(
+                await self._planner.decompose(
+                    state.user_input,
+                    tools,
+                    hints=hints,
+                    conversation=_format_history(history),
+                )
             )
         except CortexModelError:
             raise  # Ollama itself is unavailable; the executor would fail the same way
@@ -172,7 +186,11 @@ class AgentKernel:
         state.status = "executing"
         max_steps = self._settings.max_agent_steps
 
-        while state.status not in ("complete", "failed") and state.steps_taken < max_steps:
+        while (
+            state.status not in ("complete", "failed")
+            and state.steps_taken < max_steps
+            and time.monotonic() < deadline
+        ):
             await self._emit(
                 event_queue,
                 {
@@ -190,7 +208,12 @@ class AgentKernel:
             results_before = len(state.tool_results)
             repeats_before = state.repeated_calls
             state = await self._executor.step(
-                state, self._tool_registry, self._router, event_queue, capability
+                state,
+                self._tool_registry,
+                self._router,
+                event_queue,
+                capability,
+                allow_tools=not _is_tool_free_plan(state.plan),
             )
             if persist:
                 await self._store_step_tools(sid, state, results_before)
@@ -211,8 +234,9 @@ class AgentKernel:
             if state.status == "reflecting":
                 state.status = "executing"
 
-        if state.status == "failed" and state.stalled and allow_lats:
-            lats_state = await self._escalate_to_lats(state, event_queue)
+        remaining = deadline - time.monotonic()
+        if state.status == "failed" and state.stalled and allow_lats and remaining > 15:
+            lats_state = await self._escalate_to_lats(state, event_queue, remaining)
             if lats_state is not None:
                 return lats_state
 
@@ -235,7 +259,7 @@ class AgentKernel:
         user still gets an answer built from everything gathered so far rather
         than a bare "maximum steps reached".
         """
-        reason = "stalled" if state.stalled else "step_limit"
+        reason = "stalled" if state.stalled else "step_or_time_limit"
         logger.info("kernel_finalizing", session_id=state.session_id, reason=reason)
         state.status = "failed"
         try:
@@ -257,6 +281,7 @@ class AgentKernel:
         self,
         state: AgentState,
         event_queue: asyncio.Queue[dict[str, Any]] | None,
+        remaining_seconds: float | None = None,
     ) -> AgentState | None:
         """Hand a stalled task to LATS, bounded by a wall-clock budget.
 
@@ -273,7 +298,10 @@ class AgentKernel:
         try:
             lats_state = await asyncio.wait_for(
                 self._lats_search(state.user_input, state.session_id),
-                timeout=lats.escalation_timeout_seconds,
+                timeout=min(
+                    lats.escalation_timeout_seconds,
+                    remaining_seconds or lats.escalation_timeout_seconds,
+                ),
             )
         except TimeoutError:
             logger.warning("lats_escalation_timeout", session_id=state.session_id)
@@ -342,7 +370,9 @@ class AgentKernel:
         if not self._settings.procedural_memory_enabled:
             return []
         try:
-            patterns = await self._memory_manager.retrieve_tool_patterns(user_input)
+            patterns = await self._memory_manager.retrieve_tool_patterns(
+                user_input, min_relevance=self._settings.procedural_min_relevance
+            )
         except Exception as exc:  # procedural memory is advisory, never fatal
             logger.warning("pattern_retrieval_failed", error=str(exc), session_id=sid)
             return []
@@ -354,8 +384,12 @@ class AgentKernel:
         ]
 
     async def _record_pattern(self, user_input: str, state: AgentState, sid: str) -> None:
-        """Persist the tool sequence of a successful run for future planner hints."""
-        if not self._settings.procedural_memory_enabled:
+        """Persist the tool sequence of a successful run for future planner hints.
+
+        Runs whose plan was shaped by hints are not recorded: otherwise one
+        unnecessary tool choice is hinted, repeated, and re-recorded forever.
+        """
+        if not self._settings.procedural_memory_enabled or state.hinted:
             return
         tool_sequence = [result.tool_name for result in state.tool_results if result.success]
         if not tool_sequence:
@@ -426,6 +460,47 @@ class AgentKernel:
         """Push an event onto the queue if one is provided."""
         if queue is not None:
             await queue.put(event)
+
+
+# A plan step that would destroy files or folders. No tool can do this, so such a
+# plan is replaced with a refusal rather than letting the model improvise.
+_DESTRUCTIVE_STEP = re.compile(
+    r"\b(delete|wipe|erase|destroy|rm\s+-rf)\b.*\b(all|every|everything|workspace|"
+    r"folder|folders|directory|directories|files|disk|drive)\b",
+    re.IGNORECASE,
+)
+_REFUSAL_STEP = "Politely refuse: deleting files is not permitted"
+
+
+# Steps that talk *about* deletion ("Explain how to delete files in Python") are
+# knowledge answers, not actions.
+_KNOWLEDGE_STEP = re.compile(
+    r"^\s*(answer|explain|describe|tell|summari[sz]e|compare|list the ways|how to)\b",
+    re.IGNORECASE,
+)
+
+
+def _refuse_destructive_plan(plan: list[str]) -> list[str]:
+    """Replace a plan that tries to destroy data with an explicit refusal step."""
+    if any(
+        _DESTRUCTIVE_STEP.search(step) and not _KNOWLEDGE_STEP.match(step) for step in plan
+    ):
+        logger.warning("destructive_plan_refused", plan=plan)
+        return [_REFUSAL_STEP]
+    return plan
+
+
+def _is_tool_free_plan(plan: list[str]) -> bool:
+    """True when the planner decided no tool is needed: a direct answer or a refusal.
+
+    The executor then runs without tool schemas, so a model that ignores the
+    plan cannot start calling tools anyway (seen: a refusal plan that still
+    produced 165 filesystem calls when tools were offered).
+    """
+    if len(plan) != 1:
+        return False
+    step = plan[0].strip().lower()
+    return step.startswith("answer directly") or "refuse" in step
 
 
 def _format_history(history: list[Message]) -> str:
