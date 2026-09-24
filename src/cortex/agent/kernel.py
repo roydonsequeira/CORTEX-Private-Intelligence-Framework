@@ -5,6 +5,7 @@ import uuid
 from typing import Any, Literal
 
 import structlog
+from opentelemetry.trace import Span
 from pydantic import BaseModel, Field
 
 from cortex.agent.executor import Executor
@@ -12,15 +13,20 @@ from cortex.agent.loop import LATSLoop
 from cortex.agent.planner import Planner
 from cortex.agent.reflector import Reflector
 from cortex.config.settings import Settings
+from cortex.exceptions import CortexModelError
 from cortex.memory.manager import MemoryManager
 from cortex.models.provider import Message
-from cortex.models.router import ModelRouter
+from cortex.models.router import ModelCapability, ModelRouter
 from cortex.observability.tracing import get_tracer
 from cortex.tools.base import ToolResult
 from cortex.tools.registry import ToolRegistry
 
 logger = structlog.get_logger(__name__)
 _tracer = get_tracer(__name__)
+
+# Recent dialogue shown to the planner so follow-up questions plan in context.
+_PLANNER_HISTORY_MESSAGES = 4
+_PLANNER_HISTORY_CHARS = 300
 
 
 class AgentState(BaseModel):
@@ -35,6 +41,12 @@ class AgentState(BaseModel):
     final_answer: str | None = None
     status: Literal["planning", "executing", "reflecting", "complete", "failed"] = "planning"
     streamed_final: bool = False
+    # Long-term memory block injected into the system prompt for this run.
+    context: str = Field(default="", exclude=True)
+    # tool-call signature -> rendered result, used to catch repeated identical calls.
+    tool_history: dict[str, str] = Field(default_factory=dict, exclude=True)
+    repeated_calls: int = Field(default=0, exclude=True)
+    stalled: bool = Field(default=False, exclude=True)
 
 
 class AgentKernel:
@@ -63,10 +75,20 @@ class AgentKernel:
         session_id: str | None = None,
         event_queue: asyncio.Queue[dict[str, Any]] | None = None,
         use_lats: bool | None = None,
+        capability: ModelCapability = ModelCapability.FAST,
         _allow_lats: bool = True,
+        _persist: bool = True,
     ) -> AgentState:
-        """Execute the agent loop for user_input and return the final AgentState."""
-        sid = session_id or uuid.uuid4().hex
+        """Execute the agent loop for user_input and return the final AgentState.
+
+        Model/Ollama failures do not raise: the run ends with ``status="failed"``,
+        an actionable message in ``final_answer``, and an ``error`` event, so API
+        and UI callers always receive a well-formed result. ``_persist=False``
+        (used by LATS simulations) keeps throwaway branches out of memory.
+        """
+        # str(uuid4()) (dashed) round-trips through the API's UUID-typed session_id
+        # unchanged; a bare hex id would come back dashed and split the session.
+        sid = session_id or str(uuid.uuid4())
         should_use_lats = _allow_lats and (use_lats is True or self._settings.use_lats)
         if should_use_lats:
             return await self._run_lats(user_input, sid, event_queue)
@@ -76,79 +98,31 @@ class AgentKernel:
         with _tracer.start_as_current_span("kernel.run") as span:
             span.set_attribute("session_id", sid)
             span.set_attribute("orchestration", "react")
-
-            context = await self._memory_manager.retrieve_context(user_input, sid)
-            if context:
-                state.messages.append(Message(role="system", content=context))
-
-            state.messages.append(Message(role="user", content=user_input))
-
             await self._emit(event_queue, {"type": "session_id", "value": sid})
 
-            state.status = "planning"
-            hints = await self._retrieve_pattern_hints(user_input, sid)
+            model_failed = False
             try:
-                tool_names = [s.name for s in self._tool_registry.list_tools()]
-                state.plan = await self._planner.decompose(
-                    user_input, tool_names, hints=hints
+                escalated = await self._react(
+                    state, event_queue, capability, _allow_lats, _persist, span
                 )
-            except Exception as exc:
-                logger.warning("planner_failed", error=str(exc), session_id=sid)
-                state.plan = [user_input]
-
-            await self._emit(event_queue, {"type": "plan", "steps": state.plan})
-
-            reflector = Reflector(self._router)
-            state.status = "executing"
-            max_steps = self._settings.max_agent_steps
-
-            while state.status not in ("complete", "failed") and state.steps_taken < max_steps:
-                await self._emit(
-                    event_queue,
-                    {
-                        "type": "step_start",
-                        "step": state.steps_taken + 1,
-                        "description": (
-                            state.plan[state.steps_taken]
-                            if state.steps_taken < len(state.plan)
-                            else "continue"
-                        ),
-                    },
-                )
-                span.set_attribute("step_count", state.steps_taken)
-
-                state = await self._executor.step(
-                    state, self._tool_registry, self._router, event_queue
-                )
-
-                last_message = state.messages[-1]
-                await self._memory_manager.store_turn(
-                    sid, last_message.role, last_message.content
-                )
-
-                if state.status not in ("complete", "failed"):
-                    state.status = "reflecting"
-                    state = await reflector.evaluate(state)
-                    if state.status == "failed" and _allow_lats:
-                        return await self._run_lats(user_input, sid, event_queue)
-                    if state.status == "reflecting":
-                        state.status = "executing"
-
-            if state.status not in ("complete", "failed"):
+            except CortexModelError as exc:
+                logger.error("kernel_model_error", session_id=sid, error=str(exc))
+                model_failed = True
                 state.status = "failed"
-                state.final_answer = state.final_answer or "Maximum steps reached without answer."
+                state.final_answer = str(exc)
+                state.streamed_final = True  # reported via the error event, not tokens
+                await self._emit(event_queue, {"type": "error", "message": str(exc)})
+                escalated = None
 
-            if state.status == "complete":
-                await self._record_pattern(user_input, state, sid)
-
-            if state.final_answer and not state.streamed_final:
+            if escalated is not None:
+                state = escalated
+            elif state.final_answer and not state.streamed_final:
                 for chunk in _chunk_text(state.final_answer):
                     await self._emit(event_queue, {"type": "token", "value": chunk})
 
-            await self._emit(
-                event_queue, {"type": "done", "steps_taken": state.steps_taken}
-            )
-            await self._memory_manager.end_session(sid)
+            await self._emit(event_queue, {"type": "done", "steps_taken": state.steps_taken})
+            if _persist:
+                await self._finish_session(sid, state, model_failed)
 
         logger.info(
             "kernel_run_complete",
@@ -157,6 +131,211 @@ class AgentKernel:
             status=state.status,
         )
         return state
+
+    async def _react(
+        self,
+        state: AgentState,
+        event_queue: asyncio.Queue[dict[str, Any]] | None,
+        capability: ModelCapability,
+        allow_lats: bool,
+        persist: bool,
+        span: Span,
+    ) -> AgentState | None:
+        """Plan and run the ReAct loop. Returns a LATS state if the run escalated."""
+        sid = state.session_id
+        history = await self._load_history(sid) if persist else []
+        state.context = await self._load_context(state.user_input, sid)
+        state.messages.extend(history)
+        state.messages.append(Message(role="user", content=state.user_input))
+        if persist:
+            await self._store(sid, "user", state.user_input)
+
+        state.status = "planning"
+        hints = await self._retrieve_pattern_hints(state.user_input, sid)
+        try:
+            tool_names = [s.name for s in self._tool_registry.list_tools()]
+            state.plan = await self._planner.decompose(
+                state.user_input,
+                tool_names,
+                hints=hints,
+                conversation=_format_history(history),
+            )
+        except CortexModelError:
+            raise  # Ollama itself is unavailable; the executor would fail the same way
+        except Exception as exc:
+            logger.warning("planner_failed", error=str(exc), session_id=sid)
+            state.plan = [state.user_input]
+
+        await self._emit(event_queue, {"type": "plan", "steps": state.plan})
+
+        reflector = Reflector(self._router)
+        state.status = "executing"
+        max_steps = self._settings.max_agent_steps
+
+        while state.status not in ("complete", "failed") and state.steps_taken < max_steps:
+            await self._emit(
+                event_queue,
+                {
+                    "type": "step_start",
+                    "step": state.steps_taken + 1,
+                    "description": (
+                        state.plan[state.steps_taken]
+                        if state.steps_taken < len(state.plan)
+                        else "continue"
+                    ),
+                },
+            )
+            span.set_attribute("step_count", state.steps_taken)
+
+            results_before = len(state.tool_results)
+            repeats_before = state.repeated_calls
+            state = await self._executor.step(
+                state, self._tool_registry, self._router, event_queue, capability
+            )
+            if persist:
+                await self._store_step_tools(sid, state, results_before)
+
+            if state.status in ("complete", "failed"):
+                break
+            new_results = state.tool_results[results_before:]
+            clean_step = (
+                bool(new_results)
+                and all(result.success for result in new_results)
+                and state.repeated_calls == repeats_before
+            )
+            if clean_step:
+                reflector.record_progress()
+                continue
+            state.status = "reflecting"
+            state = await reflector.evaluate(state)
+            if state.status == "reflecting":
+                state.status = "executing"
+
+        if state.status == "failed" and state.stalled and allow_lats:
+            lats_state = await self._escalate_to_lats(state, event_queue)
+            if lats_state is not None:
+                return lats_state
+
+        if state.status != "complete":
+            await self._finalize_incomplete(state, event_queue, capability)
+
+        if state.status == "complete":
+            await self._record_pattern(state.user_input, state, sid)
+        return None
+
+    async def _finalize_incomplete(
+        self,
+        state: AgentState,
+        event_queue: asyncio.Queue[dict[str, Any]] | None,
+        capability: ModelCapability,
+    ) -> None:
+        """Produce a best-effort answer when the loop stalled or hit its step limit.
+
+        The run stays ``failed`` (the task did not complete within budget), but the
+        user still gets an answer built from everything gathered so far rather
+        than a bare "maximum steps reached".
+        """
+        reason = "stalled" if state.stalled else "step_limit"
+        logger.info("kernel_finalizing", session_id=state.session_id, reason=reason)
+        state.status = "failed"
+        try:
+            answer, streamed = await self._executor.synthesize(
+                state, self._router, event_queue, capability
+            )
+        except CortexModelError:
+            raise
+        except Exception as exc:
+            logger.warning("synthesis_failed", error=str(exc), session_id=state.session_id)
+            answer, streamed = "", False
+        state.final_answer = answer or (
+            "I could not complete this request within my step budget. "
+            "Try rephrasing it or breaking it into smaller questions."
+        )
+        state.streamed_final = streamed and bool(answer)
+
+    async def _escalate_to_lats(
+        self,
+        state: AgentState,
+        event_queue: asyncio.Queue[dict[str, Any]] | None,
+    ) -> AgentState | None:
+        """Hand a stalled task to LATS, bounded by a wall-clock budget.
+
+        Returns the LATS state when it completes the task; otherwise None, and
+        the caller synthesises a best-effort answer from the ReAct transcript.
+        """
+        lats = self._settings.lats
+        if not lats.escalate_on_stall:
+            return None
+        await self._emit(
+            event_queue,
+            {"type": "plan", "steps": ["Stalled — escalating to Language Agent Tree Search"]},
+        )
+        try:
+            lats_state = await asyncio.wait_for(
+                self._lats_search(state.user_input, state.session_id),
+                timeout=lats.escalation_timeout_seconds,
+            )
+        except TimeoutError:
+            logger.warning("lats_escalation_timeout", session_id=state.session_id)
+            return None
+        except CortexModelError:
+            raise
+        except Exception as exc:
+            logger.warning("lats_escalation_failed", error=str(exc), session_id=state.session_id)
+            return None
+        if lats_state.status != "complete" or not lats_state.final_answer:
+            return None
+        lats_state.steps_taken += state.steps_taken
+        for chunk in _chunk_text(lats_state.final_answer):
+            await self._emit(event_queue, {"type": "token", "value": chunk})
+        lats_state.streamed_final = True
+        return lats_state
+
+    async def _load_history(self, sid: str) -> list[Message]:
+        """Replay this session's recent dialogue; memory problems never fail a run."""
+        try:
+            return await self._memory_manager.recent_history(
+                sid, max_turns=self._settings.history_turns
+            )
+        except Exception as exc:
+            logger.warning("history_load_failed", error=str(exc), session_id=sid)
+            return []
+
+    async def _load_context(self, user_input: str, sid: str) -> str:
+        """Fetch long-term memory for the request; failures degrade to no context."""
+        try:
+            return await self._memory_manager.retrieve_context(user_input, sid)
+        except Exception as exc:
+            logger.warning("memory_context_failed", error=str(exc), session_id=sid)
+            return ""
+
+    async def _store(self, sid: str, role: str, content: str) -> None:
+        """Persist one turn; storage problems are logged, never raised."""
+        if not content.strip():
+            return
+        try:
+            await self._memory_manager.store_turn(sid, role, content)
+        except Exception as exc:
+            logger.warning("memory_store_failed", error=str(exc), session_id=sid)
+
+    async def _store_step_tools(self, sid: str, state: AgentState, results_before: int) -> None:
+        """Persist the tool results produced by the step just taken."""
+        for result in state.tool_results[results_before:]:
+            content = result.output if result.success else f"ERROR: {result.error or 'failed'}"
+            await self._store(sid, "tool", f"[{result.tool_name}] {content}"[:4000])
+
+    async def _finish_session(self, sid: str, state: AgentState, model_failed: bool) -> None:
+        """Persist the answer and schedule background memory consolidation.
+
+        An infrastructure error message ("cannot reach Ollama") is not stored as
+        the assistant's reply, so it is never replayed as conversation history.
+        """
+        if state.final_answer and not model_failed:
+            await self._store(sid, "assistant", state.final_answer)
+        try:
+            await self._memory_manager.end_session(sid)
+        except Exception as exc:
+            logger.warning("end_session_failed", error=str(exc), session_id=sid)
 
     async def _retrieve_pattern_hints(self, user_input: str, sid: str) -> list[str]:
         """Return planner hints from procedural memory for similar past tasks."""
@@ -178,7 +357,7 @@ class AgentKernel:
         """Persist the tool sequence of a successful run for future planner hints."""
         if not self._settings.procedural_memory_enabled:
             return
-        tool_sequence = [result.tool_name for result in state.tool_results]
+        tool_sequence = [result.tool_name for result in state.tool_results if result.success]
         if not tool_sequence:
             return  # nothing procedural to learn from a pure-reasoning answer
         try:
@@ -198,42 +377,47 @@ class AgentKernel:
         event_queue: asyncio.Queue[dict[str, Any]] | None = None,
     ) -> AgentState:
         """Run the LATS loop and emit compatible SSE events."""
+        await self._emit(event_queue, {"type": "session_id", "value": session_id})
+        await self._emit(
+            event_queue,
+            {"type": "plan", "steps": ["Run Language Agent Tree Search"]},
+        )
+        try:
+            state = await self._lats_search(user_input, session_id)
+        except CortexModelError as exc:
+            state = AgentState(
+                session_id=session_id,
+                user_input=user_input,
+                status="failed",
+                final_answer=str(exc),
+            )
+            await self._emit(event_queue, {"type": "error", "message": str(exc)})
+        else:
+            if state.final_answer:
+                for chunk in _chunk_text(state.final_answer):
+                    await self._emit(event_queue, {"type": "token", "value": chunk})
+        await self._emit(event_queue, {"type": "done", "steps_taken": state.steps_taken})
+        return state
+
+    async def _lats_search(self, user_input: str, session_id: str) -> AgentState:
+        """Run LATS inside its tracing span and return the best state found."""
         with _tracer.start_as_current_span("kernel.lats") as span:
             span.set_attribute("session_id", session_id)
             span.set_attribute("orchestration", "lats")
             span.set_attribute("lats.max_depth", self._settings.lats.max_depth)
             span.set_attribute("lats.n_branches", self._settings.lats.n_branches)
             span.set_attribute("lats.budget", self._settings.lats.budget)
-            state = await self._run_lats_inner(user_input, session_id, event_queue)
+            loop = LATSLoop(
+                self,
+                self._router,
+                max_depth=self._settings.lats.max_depth,
+                n_branches=self._settings.lats.n_branches,
+                simulation_budget=self._settings.lats.budget,
+                evaluator=self._settings.lats.evaluator,
+            )
+            state = await loop.run(user_input, session_id)
             span.set_attribute("step_count", state.steps_taken)
             return state
-
-    async def _run_lats_inner(
-        self,
-        user_input: str,
-        session_id: str,
-        event_queue: asyncio.Queue[dict[str, Any]] | None = None,
-    ) -> AgentState:
-        """Run LATS once the root span has been opened."""
-        await self._emit(event_queue, {"type": "session_id", "value": session_id})
-        await self._emit(
-            event_queue,
-            {"type": "plan", "steps": ["Run Language Agent Tree Search"]},
-        )
-        loop = LATSLoop(
-            self,
-            self._router,
-            max_depth=self._settings.lats.max_depth,
-            n_branches=self._settings.lats.n_branches,
-            simulation_budget=self._settings.lats.budget,
-            evaluator=self._settings.lats.evaluator,
-        )
-        state = await loop.run(user_input, session_id)
-        if state.final_answer:
-            for chunk in _chunk_text(state.final_answer):
-                await self._emit(event_queue, {"type": "token", "value": chunk})
-        await self._emit(event_queue, {"type": "done", "steps_taken": state.steps_taken})
-        return state
 
     @staticmethod
     async def _emit(
@@ -242,6 +426,14 @@ class AgentKernel:
         """Push an event onto the queue if one is provided."""
         if queue is not None:
             await queue.put(event)
+
+
+def _format_history(history: list[Message]) -> str:
+    """Compact the last few dialogue messages for the planner prompt."""
+    recent = history[-_PLANNER_HISTORY_MESSAGES:]
+    return "\n".join(
+        f"{m.role.capitalize()}: {m.content[:_PLANNER_HISTORY_CHARS]}" for m in recent
+    )
 
 
 def _chunk_text(text: str, chunk_size: int = 80) -> list[str]:

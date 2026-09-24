@@ -11,6 +11,8 @@ export type AgentEvent =
   | { type: "tool_call"; tool: string; args: Record<string, unknown> }
   | { type: "tool_result"; tool?: string; success: boolean; output: string; error?: string | null }
   | { type: "token"; value: string }
+  // Text streamed before a tool call was preamble, not the answer: discard it.
+  | { type: "token_reset" }
   | { type: "done"; steps_taken: number }
   | { type: "error"; message: string };
 

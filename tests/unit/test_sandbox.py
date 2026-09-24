@@ -159,3 +159,79 @@ def test_create_sandbox_selects_backend() -> None:
     """create_sandbox honours settings.code_sandbox."""
     assert isinstance(create_sandbox(Settings(code_sandbox="restricted")), RestrictedSandbox)
     assert isinstance(create_sandbox(Settings(code_sandbox="container")), ContainerSandbox)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("total = 0\nfor i in range(5):\n    total += i\nprint(total)", "10"),
+        ("d = {}\nd['k'] = 1\nprint(d)", "{'k': 1}"),
+        ("a = [1, 2, 3]\na[1] = 9\nprint(a)", "[1, 9, 3]"),
+        (
+            "class P:\n    def __init__(self, n):\n        self.n = n\n"
+            "    def double(self):\n        return self.n * 2\nprint(P(4).double())",
+            "8",
+        ),
+        ("print(hasattr('x', 'upper'), bin(10), hex(255))", "True 0b1010 0xff"),
+        ("n = 0\nwhile n < 3:\n    n += 1\nprint(n)", "3"),
+    ],
+)
+async def test_restricted_sandbox_runs_common_llm_code(code: str, expected: str) -> None:
+    """Patterns LLMs write constantly (+=, item assignment, classes) are supported."""
+    result = await RestrictedSandbox().run(code, timeout_seconds=10.0)
+    assert result.success is True, result.error
+    assert expected in result.output
+
+
+@pytest.mark.asyncio
+async def test_restricted_sandbox_supports_datetime_strptime() -> None:
+    """datetime.strptime lazily imports _strptime from C; date maths must still work."""
+    code = (
+        "from datetime import datetime\n"
+        "a = datetime.strptime('2024-01-01', '%Y-%m-%d')\n"
+        "b = datetime.strptime('2024-12-25', '%Y-%m-%d')\n"
+        "print((b - a).days)"
+    )
+    result = await RestrictedSandbox().run(code, timeout_seconds=10.0)
+    assert result.success is True, result.error
+    assert result.output == "359"
+
+
+@pytest.mark.asyncio
+async def test_restricted_sandbox_reports_trailing_expression() -> None:
+    """A bare last expression is reported like a REPL (models often omit print)."""
+    code = (
+        "def fib(n):\n    a, b = 0, 1\n    for _ in range(n):\n"
+        "        a, b = b, a + b\n    return a\nfib(20)"
+    )
+    result = await RestrictedSandbox().run(code, timeout_seconds=10.0)
+    assert result.success is True
+    assert result.output == "6765"
+
+
+@pytest.mark.asyncio
+async def test_restricted_sandbox_does_not_leak_loop_underscore() -> None:
+    """A top-level `for _ in ...` loop variable is not reported as output."""
+    result = await RestrictedSandbox().run(
+        "for _ in range(3):\n    pass\nprint('ok')", timeout_seconds=10.0
+    )
+    assert result.output == "ok"
+
+
+@pytest.mark.asyncio
+async def test_restricted_sandbox_explains_empty_output() -> None:
+    """Code that prints nothing says so instead of returning an empty string."""
+    result = await RestrictedSandbox().run("x = 1", timeout_seconds=10.0)
+    assert result.success is True
+    assert "print()" in result.output
+
+
+@pytest.mark.asyncio
+async def test_restricted_sandbox_blocks_module_writes_and_getattr_escape() -> None:
+    """Writes to modules and getattr traversal into modules stay blocked."""
+    write = await RestrictedSandbox().run("math.pi = 3", timeout_seconds=10.0)
+    assert write.success is False
+    escape = await RestrictedSandbox().run("getattr(json, 'codecs')", timeout_seconds=10.0)
+    assert escape.success is False
+    assert "not permitted" in (escape.error or "")

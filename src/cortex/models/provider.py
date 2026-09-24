@@ -4,6 +4,7 @@ import json
 import time
 from collections.abc import AsyncIterator
 from typing import Any, Literal
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import structlog
@@ -35,12 +36,31 @@ class ToolResult(BaseModel):
 
 
 class Message(BaseModel):
-    """A single message in the conversation history."""
+    """A single message in the conversation history.
+
+    An assistant message that requested tools carries ``tool_calls``; the tool
+    replies that follow carry ``tool_name``. Both are sent to Ollama so the model
+    sees its own tool calls paired with their results — without that pairing a
+    small model re-issues the same call because it never "remembers" making it.
+    """
 
     role: Literal["system", "user", "assistant", "tool"]
     content: str
     tool_calls: list[ToolCall] | None = None
     tool_results: list[ToolResult] | None = None
+    tool_name: str | None = None
+
+    def to_ollama(self) -> dict[str, Any]:
+        """Serialise to the Ollama /api/chat message shape."""
+        payload: dict[str, Any] = {"role": self.role, "content": self.content}
+        if self.tool_calls:
+            payload["tool_calls"] = [
+                {"function": {"name": call.name, "arguments": call.arguments}}
+                for call in self.tool_calls
+            ]
+        if self.tool_name:
+            payload["tool_name"] = self.tool_name
+        return payload
 
 
 class GenerationConfig(BaseModel):
@@ -80,11 +100,80 @@ class StreamChunk(BaseModel):
 
 
 class OllamaProvider:
-    """Async client for the Ollama REST API. Reuses a single httpx.AsyncClient."""
+    """Async client for the Ollama REST API. Reuses a single httpx.AsyncClient.
 
-    def __init__(self, base_url: str, timeout: float = 120.0) -> None:
-        self._base_url = base_url.rstrip("/")
-        self._client = httpx.AsyncClient(base_url=self._base_url, timeout=timeout)
+    ``timeout`` bounds a whole non-streaming generation (and the gap between
+    streamed chunks), so it must cover a cold model load plus generation on
+    modest hardware. ``num_ctx`` pins the context window for every call — Ollama
+    reloads the model whenever it changes, and its small default silently
+    truncates long tool transcripts. ``keep_alive`` keeps the model resident
+    between requests so a pause in a demo does not trigger a cold reload.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        timeout: float = 300.0,
+        num_ctx: int | None = None,
+        keep_alive: str | None = None,
+    ) -> None:
+        self._base_url = _prefer_ipv4_loopback(base_url.rstrip("/"))
+        self._num_ctx = num_ctx
+        self._keep_alive = keep_alive
+        self._client = httpx.AsyncClient(
+            base_url=self._base_url,
+            timeout=httpx.Timeout(timeout, connect=10.0),
+        )
+
+    def _payload(
+        self,
+        model: str,
+        messages: list[Message],
+        cfg: GenerationConfig,
+        tools: list[dict[str, Any]] | None,
+        stream: bool,
+    ) -> dict[str, Any]:
+        """Build an /api/chat request body."""
+        options: dict[str, Any] = {
+            "temperature": cfg.temperature,
+            "top_p": cfg.top_p,
+            "num_predict": cfg.max_tokens,
+        }
+        if self._num_ctx:
+            options["num_ctx"] = self._num_ctx
+        if cfg.stop:
+            options["stop"] = cfg.stop
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": [m.to_ollama() for m in messages],
+            "stream": stream,
+            "options": options,
+        }
+        if self._keep_alive:
+            payload["keep_alive"] = self._keep_alive
+        if tools:
+            payload["tools"] = tools
+        return payload
+
+    def _describe_error(self, exc: httpx.HTTPError, model: str) -> str:
+        """Turn an httpx failure into an actionable, human-readable message."""
+        if isinstance(exc, httpx.ConnectError):
+            return (
+                f"Cannot reach Ollama at {self._base_url}. "
+                "Start it with `ollama serve` (or open the Ollama app) and retry."
+            )
+        if isinstance(exc, httpx.TimeoutException):
+            return (
+                f"Ollama did not respond in time for model '{model}'. The model may "
+                "still be loading — retry in a moment, or raise ollama_timeout_seconds."
+            )
+        if isinstance(exc, httpx.HTTPStatusError):
+            status = exc.response.status_code
+            detail = _error_detail(exc.response)
+            if status == 404:
+                return f"Model '{model}' is not available in Ollama. Run: ollama pull {model}"
+            return f"Ollama returned HTTP {status} for model '{model}': {detail}"
+        return f"Ollama request failed: {exc}"
 
     async def complete(
         self,
@@ -95,20 +184,7 @@ class OllamaProvider:
     ) -> ModelResponse:
         """Call the Ollama /api/chat endpoint and return a normalised ModelResponse."""
         cfg = config or GenerationConfig()
-        payload: dict[str, Any] = {
-            "model": model,
-            "messages": [m.model_dump(exclude_none=True) for m in messages],
-            "stream": False,
-            "options": {
-                "temperature": cfg.temperature,
-                "top_p": cfg.top_p,
-                "num_predict": cfg.max_tokens,
-            },
-        }
-        if cfg.stop:
-            payload["options"]["stop"] = cfg.stop
-        if tools:
-            payload["tools"] = tools
+        payload = self._payload(model, messages, cfg, tools, stream=False)
 
         start = time.monotonic()
         with _tracer.start_as_current_span("ollama.complete") as span:
@@ -118,7 +194,7 @@ class OllamaProvider:
                 response = await self._client.post("/api/chat", json=payload)
                 response.raise_for_status()
             except httpx.HTTPError as exc:
-                raise CortexModelError(f"Ollama request failed: {exc}") from exc
+                raise CortexModelError(self._describe_error(exc, model)) from exc
 
             latency = (time.monotonic() - start) * 1000
             data = response.json()
@@ -151,20 +227,7 @@ class OllamaProvider:
         chunks and are surfaced verbatim so the caller can still route tool use.
         """
         cfg = config or GenerationConfig()
-        payload: dict[str, Any] = {
-            "model": model,
-            "messages": [m.model_dump(exclude_none=True) for m in messages],
-            "stream": True,
-            "options": {
-                "temperature": cfg.temperature,
-                "top_p": cfg.top_p,
-                "num_predict": cfg.max_tokens,
-            },
-        }
-        if cfg.stop:
-            payload["options"]["stop"] = cfg.stop
-        if tools:
-            payload["tools"] = tools
+        payload = self._payload(model, messages, cfg, tools, stream=True)
 
         start = time.monotonic()
         with _tracer.start_as_current_span("ollama.stream_complete") as span:
@@ -174,11 +237,21 @@ class OllamaProvider:
                 async with self._client.stream(
                     "POST", "/api/chat", json=payload
                 ) as response:
+                    if response.is_error:
+                        await response.aread()
                     response.raise_for_status()
                     async for line in response.aiter_lines():
                         if not line.strip():
                             continue
-                        data = json.loads(line)
+                        try:
+                            data = json.loads(line)
+                        except json.JSONDecodeError:
+                            logger.warning("ollama_stream_bad_line", line=line[:200])
+                            continue
+                        if data.get("error"):
+                            raise CortexModelError(
+                                f"Ollama error from model '{model}': {data['error']}"
+                            )
                         message = data.get("message", {})
                         done = bool(data.get("done"))
                         if done:
@@ -197,7 +270,7 @@ class OllamaProvider:
                             model=data.get("model", model),
                         )
             except httpx.HTTPError as exc:
-                raise CortexModelError(f"Ollama stream failed: {exc}") from exc
+                raise CortexModelError(self._describe_error(exc, model)) from exc
 
     async def embed(self, model: str, text: str | list[str]) -> list[list[float]]:
         """Embed one or more texts using the specified model.
@@ -235,7 +308,7 @@ class OllamaProvider:
                 )
                 response.raise_for_status()
             except httpx.HTTPError as exc:
-                raise CortexModelError(f"Ollama embed failed: {exc}") from exc
+                raise CortexModelError(self._describe_error(exc, model)) from exc
             embeddings.append(response.json()["embedding"])
         return embeddings
 
@@ -256,6 +329,48 @@ class OllamaProvider:
         except Exception:
             return False
 
+    async def warmup(self, model: str) -> None:
+        """Load a chat model into memory ahead of the first request.
+
+        An empty-prompt /api/generate loads the weights without generating. The
+        same ``num_ctx`` as real calls is sent so the first chat does not reload.
+        """
+        payload: dict[str, Any] = {"model": model}
+        if self._num_ctx:
+            payload["options"] = {"num_ctx": self._num_ctx}
+        if self._keep_alive:
+            payload["keep_alive"] = self._keep_alive
+        try:
+            response = await self._client.post("/api/generate", json=payload)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise CortexModelError(self._describe_error(exc, model)) from exc
+
     async def aclose(self) -> None:
         """Close the underlying HTTP client."""
         await self._client.aclose()
+
+
+def _prefer_ipv4_loopback(url: str) -> str:
+    """Rewrite a ``localhost`` Ollama URL to ``127.0.0.1``.
+
+    Ollama binds IPv4 loopback only. On Windows, resolving ``localhost`` tries
+    ``::1`` first and the refused IPv6 connect costs ~2 s before falling back,
+    on every new connection (measured: 2062 ms vs 23 ms).
+    """
+    parts = urlsplit(url)
+    if parts.hostname != "localhost":
+        return url
+    netloc = "127.0.0.1" + (f":{parts.port}" if parts.port else "")
+    return urlunsplit(parts._replace(netloc=netloc))
+
+
+def _error_detail(response: httpx.Response) -> str:
+    """Extract Ollama's ``{"error": ...}`` message from a failed response."""
+    try:
+        return str(response.json().get("error", response.text))[:300]
+    except Exception:
+        try:
+            return response.text[:300]
+        except Exception:
+            return "no detail"

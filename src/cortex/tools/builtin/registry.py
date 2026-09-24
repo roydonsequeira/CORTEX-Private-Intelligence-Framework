@@ -18,4 +18,4 @@ def register_builtin_tools(
     registry.register(FileSystemTool.from_settings(settings))
     registry.register(CodeExecutionTool.from_settings(settings))
     registry.register(WebFetchTool())
-    registry.register(DocumentSearchTool(semantic_memory))
+    registry.register(DocumentSearchTool(semantic_memory, allowed_root=settings.allowed_root))

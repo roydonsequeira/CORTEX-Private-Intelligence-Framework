@@ -35,3 +35,17 @@ class WorkingMemory(BaseMemory):
     def clear(self) -> None:
         """Clear all working memory entries."""
         self._store.clear()
+
+    def clear_session(self, session_id: str) -> None:
+        """Clear only the entries belonging to one session.
+
+        The store is shared by concurrent requests, so ending one session must not
+        wipe another session's scratchpad.
+        """
+        stale = [
+            entry_id
+            for entry_id, entry in self._store.items()
+            if entry.metadata.get("session_id") == session_id
+        ]
+        for entry_id in stale:
+            del self._store[entry_id]

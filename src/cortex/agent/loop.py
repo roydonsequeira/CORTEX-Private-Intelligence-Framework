@@ -1,6 +1,5 @@
 """Language Agent Tree Search for complex multi-branch agent tasks."""
 
-import json
 import math
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -8,6 +7,7 @@ from uuid import uuid4
 import structlog
 from pydantic import BaseModel, Field
 
+from cortex.models.parsing import extract_json, extract_string_list
 from cortex.models.provider import GenerationConfig, Message
 from cortex.models.router import ModelCapability, ModelRouter
 from cortex.observability.tracing import get_tracer
@@ -166,8 +166,10 @@ class LATSLoop:
                 ],
                 GenerationConfig(temperature=0.0, max_tokens=128),
             )
+        data = extract_json(response.content)
         try:
-            data = json.loads(response.content)
+            if not isinstance(data, dict):
+                raise ValueError("expected a JSON object")
             scores = [
                 float(data.get("goal_completion", 0.0)),
                 float(data.get("factual_correctness", 0.0)),
@@ -175,7 +177,7 @@ class LATSLoop:
             ]
             weighted = scores[0] * 0.5 + scores[1] * 0.35 + scores[2] * 0.15
             return max(0.0, min(1.0, weighted))
-        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        except (TypeError, ValueError) as exc:
             logger.warning("lats_evaluation_parse_failed", error=str(exc), raw=response.content[:200])
             return 1.0 if state.status == "complete" else 0.0
 
@@ -232,17 +234,9 @@ class LATSLoop:
                 ],
                 GenerationConfig(temperature=0.7, max_tokens=512),
             )
-        try:
-            branches = json.loads(response.content)
-            if isinstance(branches, list):
-                return [str(branch).strip() for branch in branches if str(branch).strip()]
-        except json.JSONDecodeError:
-            pass
-        return [
-            line.lstrip("0123456789. -").strip()
-            for line in response.content.splitlines()
-            if line.strip()
-        ][: self._n_branches]
+        return extract_string_list(response.content, keys=("branches", "steps"))[
+            : self._n_branches
+        ]
 
     async def _simulate(
         self, task: str, branch: str, session_id: str, depth: int
@@ -256,6 +250,7 @@ class LATSLoop:
                 branch_task,
                 session_id=f"{session_id}-lats-{depth}-{uuid4().hex[:8]}",
                 _allow_lats=False,
+                _persist=False,
             )
 
     def _backpropagate(self, nodes: dict[str, SearchNode], node_id: str, value: float) -> None:

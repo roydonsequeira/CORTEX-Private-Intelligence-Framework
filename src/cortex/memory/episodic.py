@@ -123,7 +123,7 @@ class EpisodicMemory(BaseMemory):
                     SELECT role, content
                     FROM episodes
                     WHERE session_id = ?
-                    ORDER BY created_at ASC
+                    ORDER BY created_at ASC, rowid ASC
                     """,
                     (session_id,),
                 )

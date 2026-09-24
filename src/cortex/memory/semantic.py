@@ -1,21 +1,33 @@
 """Semantic memory — long-term vector store backed by ChromaDB."""
 
+import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
-import chromadb
 import structlog
 
 from cortex.memory.base import BaseMemory, MemoryEntry, MemoryQuery
+from cortex.memory.chroma import get_chroma_client
 from cortex.memory.episodic import EpisodicMemory
+from cortex.models.parsing import extract_json
 from cortex.models.provider import GenerationConfig, Message, OllamaProvider
 from cortex.observability.tracing import get_tracer
 
 logger = structlog.get_logger(__name__)
 _tracer = get_tracer(__name__)
+
+_MIN_CONSOLIDATION_CHARS = 12
+_CONSOLIDATION_PROMPT = (
+    "You maintain long-term memory about the USER for a personal AI assistant. "
+    "From this exchange, extract at most 3 durable facts about the user — their "
+    "name, role, preferences, projects, goals, or stated decisions. Each fact is a "
+    "short standalone sentence in the third person (e.g. \"The user's name is Sam.\"). "
+    "Do NOT include general knowledge, calculation results, or anything about the "
+    "assistant. If there is nothing worth remembering, return []. "
+    "Respond with ONLY a JSON array of strings."
+)
 
 
 class SemanticMemory(BaseMemory):
@@ -42,9 +54,10 @@ class SemanticMemory(BaseMemory):
 
     async def initialize(self) -> None:
         """Create or connect to the cortex_semantic Chroma collection."""
+        if self._collection is not None:
+            return
         if self._client is None:
-            self._chroma_path.mkdir(parents=True, exist_ok=True)
-            self._client = chromadb.PersistentClient(path=str(self._chroma_path))
+            self._client = get_chroma_client(self._chroma_path)
         self._collection = self._client.get_or_create_collection(self._collection_name)
 
     async def store(self, entry: MemoryEntry) -> str:
@@ -70,6 +83,9 @@ class SemanticMemory(BaseMemory):
         """Retrieve semantically similar entries from ChromaDB."""
         await self.initialize()
         assert self._collection is not None
+        available = self._collection.count()
+        if available == 0:
+            return []  # nothing stored yet: skip the embedding round-trip
         with _tracer.start_as_current_span("memory.semantic.retrieve") as span:
             span.set_attribute("memory.collection", self._collection_name)
             span.set_attribute("memory.top_k", query.top_k)
@@ -78,28 +94,30 @@ class SemanticMemory(BaseMemory):
             embedding = (await self._provider.embed(self._embed_model, query.text))[0]
             result = self._collection.query(
                 query_embeddings=[embedding],
-                n_results=query.top_k,
+                n_results=min(query.top_k, available),
             )
         return _entries_from_query_result(result)
 
-    async def consolidate(self, session_id: str) -> None:
-        """Extract durable facts from episodic history and store them as semantic memory."""
+    async def consolidate(self, session_id: str, last_messages: int = 4) -> None:
+        """Extract durable facts from the latest exchange and store them as semantic memory.
+
+        Only the most recent ``last_messages`` user/assistant messages are read, so
+        each exchange is consolidated once instead of re-reading the whole session
+        every turn. Fact ids are derived from the normalised text, so re-learning
+        the same fact updates it instead of duplicating it.
+        """
         if self._episodic_memory is None:
             logger.debug("semantic_consolidation_skipped_no_episodic", session_id=session_id)
             return
         history = await self._episodic_memory.get_session_history(session_id)
-        if not history:
-            return
+        dialogue = [m for m in history if m.role in ("user", "assistant")][-last_messages:]
+        user_text = " ".join(m.content for m in dialogue if m.role == "user")
+        if len(user_text.strip()) < _MIN_CONSOLIDATION_CHARS:
+            return  # greetings and one-word turns carry nothing worth remembering
 
-        transcript = "\n".join(f"{m.role}: {m.content}" for m in history)
+        transcript = "\n".join(f"{m.role}: {m.content[:2000]}" for m in dialogue)
         messages = [
-            Message(
-                role="system",
-                content=(
-                    "Given this conversation, extract 3-5 atomic facts that would be "
-                    "useful to remember in future sessions. Format as JSON array of strings."
-                ),
-            ),
+            Message(role="system", content=_CONSOLIDATION_PROMPT),
             Message(role="user", content=transcript),
         ]
         with _tracer.start_as_current_span("memory.semantic.consolidate") as span:
@@ -108,19 +126,16 @@ class SemanticMemory(BaseMemory):
             response = await self._provider.complete(
                 self._consolidation_model,
                 messages,
-                GenerationConfig(temperature=0.1, max_tokens=512),
+                GenerationConfig(temperature=0.1, max_tokens=256),
             )
-        try:
-            facts = json.loads(response.content)
-        except json.JSONDecodeError:
+        facts = extract_json(response.content)
+        if not isinstance(facts, list):
             logger.warning("semantic_consolidation_parse_failed", raw=response.content[:200])
             return
-        if not isinstance(facts, list):
-            return
-        for fact in [str(f).strip() for f in facts if str(f).strip()][:5]:
+        for fact in [str(f).strip() for f in facts if str(f).strip()][:3]:
             await self.store(
                 MemoryEntry(
-                    id=uuid4().hex,
+                    id=_fact_id(fact),
                     content=fact,
                     metadata={"source_session": session_id},
                     timestamp=datetime.now(UTC),
@@ -133,6 +148,12 @@ class SemanticMemory(BaseMemory):
         await self.initialize()
         assert self._collection is not None
         self._collection.delete(ids=[entry_id])
+
+
+def _fact_id(fact: str) -> str:
+    """Stable id for a fact so the same fact learned twice is upserted, not duplicated."""
+    normalised = " ".join(fact.casefold().split())
+    return "fact-" + hashlib.sha1(normalised.encode("utf-8")).hexdigest()
 
 
 def _metadata_for_chroma(entry: MemoryEntry) -> dict[str, str | int | float | bool]:

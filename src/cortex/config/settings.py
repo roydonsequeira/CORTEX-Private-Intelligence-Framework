@@ -36,8 +36,15 @@ class _YamlSource(PydanticBaseSettingsSource):
         config_path = _resolve_config_path()
         if config_path is None:
             return {}
-        with config_path.open() as f:
-            return yaml.safe_load(f) or {}
+        # Explicit UTF-8: the Windows default (cp1252) fails on any non-ASCII byte.
+        with config_path.open(encoding="utf-8") as f:
+            try:
+                data = yaml.safe_load(f) or {}
+            except yaml.YAMLError as exc:
+                raise ValueError(f"Invalid YAML in {config_path}: {exc}") from exc
+        if not isinstance(data, dict):
+            raise ValueError(f"{config_path} must contain a mapping of settings.")
+        return data
 
     def get_field_value(
         self, field: FieldInfo, field_name: str
@@ -60,13 +67,20 @@ class _YamlSource(PydanticBaseSettingsSource):
 
 
 class LATSSettings(BaseModel):
-    """Language Agent Tree Search settings."""
+    """Language Agent Tree Search settings.
+
+    ``escalate_on_stall`` lets the ReAct loop hand a stalled task to LATS;
+    ``escalation_timeout_seconds`` bounds that search so a stuck request still
+    returns a best-effort answer in reasonable time.
+    """
 
     enabled: bool = False
     max_depth: int = 5
     n_branches: int = 3
     budget: int = 10
     evaluator: Literal["model", "heuristic"] = "model"
+    escalate_on_stall: bool = True
+    escalation_timeout_seconds: float = 60.0
 
 
 class SupervisorSettings(BaseModel):
@@ -91,6 +105,15 @@ class Settings(BaseSettings):
     reasoning_model: str = "deepseek-r1:8b"
     code_model: str = "qwen2.5-coder:7b"
     embed_model: str = "nomic-embed-text"
+    # A cold 7-8B model load plus a long answer can exceed two minutes on a laptop.
+    ollama_timeout_seconds: float = 300.0
+    # Pinned for every call: Ollama reloads the model when num_ctx changes, and its
+    # small default silently truncates long tool transcripts.
+    ollama_num_ctx: int = 8192
+    # How long Ollama keeps the model resident after a request (its default is 5m).
+    ollama_keep_alive: str = "30m"
+    # Load the chat model in the background at startup so the first request is fast.
+    warmup_on_startup: bool = True
     chroma_path: Path = Path("./.cortex/chroma")
     db_path: Path = Path("./.cortex/cortex.db")
     task_store: Literal["memory", "sqlite"] = "memory"
@@ -102,9 +125,16 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     telemetry_enabled: bool = True
     otel_endpoint: str = "http://localhost:4317"
-    max_agent_steps: int = 20
+    max_agent_steps: int = 10
     stream_tokens: bool = True
     procedural_memory_enabled: bool = True
+    # Prior user/assistant turns of the same session replayed into each request.
+    history_turns: int = 6
+    # Extract durable user facts into semantic memory after each exchange
+    # (runs in the background; never delays the response).
+    memory_consolidation: bool = True
+    # Semantic memories below this relevance (1 / (1 + distance)) are not injected.
+    semantic_min_relevance: float = 0.0
     plugins_dir: Path = Path("./src/cortex/tools/plugins")
     allowed_root: Path = Path(".")
     allowed_write_extensions: list[str] = [".txt", ".md", ".json", ".csv", ".py"]

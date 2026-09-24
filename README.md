@@ -88,12 +88,16 @@ make pull-models-demo
 
 Same URLs as above. Answers are weaker than the full 8B stack — this shows the machinery (planning, streaming, tool calls, memory, tracing), not frontier-model quality. Warm the model with one query before presenting, since the first call loads it.
 
-Running the API **natively without Docker** (no Jaeger collector)? Set `CORTEX_TELEMETRY_ENABLED=false` to skip trace/metric export so the terminal stays free of "connection refused" export warnings:
+### Running natively (no Docker)
+
+After `pip install -e .` in a virtual environment, use the `cortex` command. It runs inside the environment CORTEX is installed in, so it cannot accidentally pick up another Python's `uvicorn` from `PATH` (which fails with `No module named 'cortex'`):
 
 ```bash
-uvicorn cortex.api.server:create_app --factory --port 8000
+cortex doctor   # checks Python, cortex.yaml, Ollama, pulled models, data dirs, port, HTTPS
+cortex serve    # starts the API on http://localhost:8000 (warms the model in the background)
 ```
-(with `CORTEX_TELEMETRY_ENABLED=false` in the environment).
+
+Without a Jaeger collector, set `telemetry_enabled: false` in `cortex.yaml` (or `CORTEX_TELEMETRY_ENABLED=false`) to skip trace/metric export. `cortex reset-memory --yes` wipes stored memory for a clean start.
 
 ## Configuration
 
@@ -106,6 +110,11 @@ All runtime configuration lives in `cortex.yaml` and can be overridden with `COR
 | `reasoning_model` | `deepseek-r1:8b` | Planner / LATS model (REASONING capability) |
 | `code_model` | `qwen2.5-coder:7b` | Code model (CODE capability) |
 | `embed_model` | `nomic-embed-text` | Embedding model |
+| `ollama_timeout_seconds` | `300` | Per-request Ollama timeout (covers a cold model load) |
+| `ollama_num_ctx` | `8192` | Context window pinned on every call |
+| `ollama_keep_alive` | `30m` | How long Ollama keeps the model loaded between requests |
+| `max_agent_steps` | `10` | ReAct step budget; at the limit CORTEX synthesizes a best-effort answer |
+| `history_turns` | `6` | Prior turns of the session replayed into each request |
 | `chroma_path` | `./.cortex/chroma` | Local Chroma persistence path |
 | `db_path` | `./.cortex/cortex.db` | SQLite episodic memory path |
 | `api_host` / `api_port` | `0.0.0.0` / `8000` | FastAPI bind address |
