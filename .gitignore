@@ -13,6 +13,8 @@ build/
 venv/
 env/
 .env
+.env.*
+!.env.example
 
 # Testing & coverage
 .pytest_cache/
@@ -20,8 +22,9 @@ env/
 coverage.xml
 htmlcov/
 
-# Mypy
+# Linters / type checkers
 .mypy_cache/
+.ruff_cache/
 
 # CORTEX runtime data
 .cortex/
@@ -42,7 +45,12 @@ ui/.env.local
 Thumbs.db
 desktop.ini
 
-# IDE
+# Logs
+*.log
+
+# IDE / assistants
 .idea/
+.vscode/
+.claude/
 *.swp
 *.swo

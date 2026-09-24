@@ -2,8 +2,8 @@
 
 ## Supported versions
 
-CORTEX is pre-1.0 and ships fixes on the latest released version. Please run the
-most recent tag before reporting an issue.
+Security fixes ship on the latest release. Please reproduce on the most recent
+tag (or `main`) before reporting an issue.
 
 | Version | Supported |
 |---|---|
@@ -33,7 +33,11 @@ a fix before any public disclosure.
 ## Threat model and scope
 
 CORTEX is designed to run on hardware you control. Its guardrails chiefly
-contain code the LLM generates from a malicious or injected prompt. See the
+contain code the LLM generates from a malicious or injected prompt. By default
+the API is reachable only from the local machine: it binds to `127.0.0.1`,
+accepts browser requests only from the local UI's origin, rejects unknown
+`Host` names (DNS rebinding), and keeps the direct tool-execution endpoint
+disabled. Exposing it beyond loopback without `api_key` is unsupported. See the
 **Security Model** section of the [README](README.md) for what each guardrail
 does and does not guarantee.
 
@@ -42,7 +46,8 @@ In scope:
 - sandbox escapes from `python_exec` (see the RestrictedPython notes in the README),
 - filesystem-guard bypasses (workspace-root escape, extension bypass),
 - authentication/authorization bypasses when `api_key` is configured,
-- request handling that lets one client affect another.
+- request handling that lets one client affect another,
+- ways for a web page or another origin to reach a default (loopback) instance.
 
 Out of scope:
 

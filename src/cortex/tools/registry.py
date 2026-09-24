@@ -67,7 +67,7 @@ class ToolRegistry:
         """Format all tool schemas for the Ollama tool-call API."""
         return [t.to_ollama_format() for t in self._tools.values()]
 
-    async def execute(self, tool_name: str, **kwargs: object) -> ToolResult:
+    async def execute(self, tool_name: str, /, **kwargs: object) -> ToolResult:
         """Find, validate, and execute a tool. Returns a ToolResult on success or timeout."""
         tool = self._tools.get(tool_name)
         if tool is None:

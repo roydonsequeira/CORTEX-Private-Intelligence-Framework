@@ -253,6 +253,19 @@ async def test_web_fetch_rejects_non_web_urls() -> None:
     assert result.success is False
 
 
+def test_doc_chunker_splits_crlf_documents_on_paragraphs() -> None:
+    """CRLF files (Windows) are chunked by paragraph, not cut into blind windows."""
+    from cortex.tools.builtin.doc_search import _chunk_document
+
+    first = "Memory tiers: working, episodic, semantic, procedural."
+    second = "The sandbox runs code in a separate process."
+    crlf = f"{first}\r\n\r\n{second}\r\n"
+
+    chunks = _chunk_document(crlf, chunk_size=60, overlap=10)
+
+    assert chunks == [first, second]
+
+
 @pytest.mark.asyncio
 async def test_calculator_handles_functions_and_caret() -> None:
     """The calculator supports sqrt, constants, and ^ as exponent."""

@@ -101,9 +101,11 @@ class Settings(BaseSettings):
     """All CORTEX runtime configuration. No magic strings in the codebase."""
 
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "llama3.1:8b"
-    reasoning_model: str = "deepseek-r1:8b"
-    code_model: str = "qwen2.5-coder:7b"
+    # One tool-capable model for every chat role keeps setup to a single pull;
+    # qwen2.5:7b had the most reliable tool calling of the models tested on a 6 GB GPU.
+    ollama_model: str = "qwen2.5:7b"
+    reasoning_model: str = "qwen2.5:7b"
+    code_model: str = "qwen2.5:7b"
     embed_model: str = "nomic-embed-text"
     # A cold 7-8B model load plus a long answer can exceed two minutes on a laptop.
     ollama_timeout_seconds: float = 300.0
@@ -118,16 +120,27 @@ class Settings(BaseSettings):
     db_path: Path = Path("./.cortex/cortex.db")
     task_store: Literal["memory", "sqlite"] = "memory"
     task_db_path: Path = Path("./.cortex/tasks.db")
-    api_host: str = "0.0.0.0"
+    # CORTEX can run code and read/write workspace files, so the API is private by
+    # default: loopback only, callable only from the local UI's origin, and only
+    # under local host names (a Host check blocks DNS-rebinding attacks from web
+    # pages). Widen these deliberately, together with api_key, to expose it.
+    api_host: str = "127.0.0.1"
     api_port: int = 8000
     api_key: str | None = None
-    cors_origins: list[str] = ["*"]
+    cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    allowed_hosts: list[str] = ["localhost", "127.0.0.1"]
+    # POST /tools/{name}/execute runs a tool directly, bypassing the agent. Debug only.
+    debug_tool_endpoint: bool = False
     log_level: str = "INFO"
     telemetry_enabled: bool = True
     otel_endpoint: str = "http://localhost:4317"
     max_agent_steps: int = 10
+    # Wall-clock budget for one ReAct run; past it, a best-effort answer is given.
+    max_run_seconds: float = 120.0
     stream_tokens: bool = True
     procedural_memory_enabled: bool = True
+    # Only tool patterns from near-duplicate past tasks become planner hints.
+    procedural_min_relevance: float = 0.6
     # Prior user/assistant turns of the same session replayed into each request.
     history_turns: int = 6
     # Extract durable user facts into semantic memory after each exchange

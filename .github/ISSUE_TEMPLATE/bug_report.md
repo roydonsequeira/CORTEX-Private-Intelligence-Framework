@@ -24,8 +24,14 @@ What did you expect to happen?
 
 - OS:
 - Python:
-- Docker:
-- Ollama model:
+- Docker (if used):
+- Ollama version and model:
+
+Output of `cortex doctor`:
+
+```text
+(paste here)
+```
 
 ## Logs / Screenshots
 

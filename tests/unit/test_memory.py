@@ -171,6 +171,29 @@ async def test_semantic_and_procedural_share_one_chroma_client(tmp_path: Path) -
         assert await semantic.retrieve(MemoryQuery(text="fact", top_k=3))
 
 
+@pytest.mark.asyncio
+async def test_procedural_patterns_below_relevance_are_not_returned(tmp_path: Path) -> None:
+    """Only near-duplicate past tasks become planner hints."""
+    from cortex.memory.procedural import ToolPattern
+
+    provider = _mock_provider()
+    procedural = ProceduralMemory(
+        tmp_path / "procedural",
+        "nomic-embed-text",
+        provider,
+        client=chromadb.EphemeralClient(),
+        collection_name="relevance_test",
+    )
+    await procedural.store_pattern(
+        ToolPattern(task_description="write a file", tool_sequence=["filesystem"], success=True, avg_steps=1)
+    )
+    # Same embedding for the query: distance 0 -> relevance 1.0.
+    assert await procedural.retrieve_patterns("write a file", min_relevance=0.6)
+
+    provider.embed = AsyncMock(return_value=[[0.9, -0.5, 0.1]])  # type: ignore[method-assign]
+    assert await procedural.retrieve_patterns("delete everything", min_relevance=0.6) == []
+
+
 def _manager(tmp_path: Path, provider: OllamaProvider, semantic: SemanticMemory) -> MemoryManager:
     episodic = EpisodicMemory(tmp_path / "cortex.db")
     procedural = ProceduralMemory(

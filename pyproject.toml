@@ -8,7 +8,20 @@ version = "1.0.0"
 description = "CORTEX — Private Intelligence Framework. A fully local, privacy-first AI agent."
 readme = "README.md"
 license = { text = "MIT" }
+authors = [{ name = "Roydon Sequeira" }]
 requires-python = ">=3.12"
+keywords = ["ai-agent", "local-llm", "ollama", "rag", "react-agent", "privacy", "fastapi", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: FastAPI",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "fastapi>=0.115,<0.200",
     "uvicorn[standard]>=0.30,<1.0",
@@ -22,13 +35,18 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.46b0,<1.0",
     "structlog>=24.4,<26.0",
     "anyio>=4.6,<5.0",
-    "rich>=13.8,<15.0",
     "pyyaml>=6.0,<7.0",
     "restrictedpython>=8.0,<9.0",
     "html2text>=2024.2.26",
     "jsonschema>=4.23,<5.0",
     "truststore>=0.9",
 ]
+
+[project.urls]
+Homepage = "https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework"
+Repository = "https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework"
+Issues = "https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/issues"
+Changelog = "https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/blob/main/CHANGELOG.md"
 
 [project.scripts]
 cortex = "cortex.cli:main"

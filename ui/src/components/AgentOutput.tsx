@@ -59,6 +59,15 @@ export function AgentOutput({ events, isStreaming, onRun }: AgentOutputProps) {
   );
 }
 
+// Small models often wrap a Markdown table or list in a ```markdown fence, which
+// would render as raw pipes in a code block. Unwrap fences labelled markdown/md;
+// real code fences (python, bash, …) are left untouched.
+const MARKDOWN_FENCE = /```(?:markdown|md)[ \t]*\n([\s\S]*?)```/g;
+
+function unwrapMarkdownFences(text: string): string {
+  return text.replace(MARKDOWN_FENCE, (_match, inner: string) => inner);
+}
+
 function TurnBlock({ turn, streaming }: { turn: Turn; streaming: boolean }) {
   const plan = turn.events.find((e) => e.type === "plan") as
     | Extract<TimedEvent, { type: "plan" }>
@@ -121,7 +130,7 @@ function TurnBlock({ turn, streaming }: { turn: Turn; streaming: boolean }) {
       {answer ? (
         <div className="settle answer rounded-card border border-line bg-panel px-5 py-4 text-[15px] leading-relaxed text-ink">
           <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-            {answer}
+            {unwrapMarkdownFences(answer)}
           </ReactMarkdown>
           {streaming ? <span className="caret" aria-hidden /> : null}
         </div>

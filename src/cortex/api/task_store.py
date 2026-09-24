@@ -7,6 +7,7 @@ infrastructure. Select the backend with ``settings.task_store``.
 """
 
 import json
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -32,18 +33,26 @@ class TaskStore(Protocol):
 
 
 class InMemoryTaskStore:
-    """Process-local task store. Fast, but results are lost on restart."""
+    """Process-local task store. Fast, but results are lost on restart.
 
-    def __init__(self) -> None:
-        self._records: dict[str, dict[str, Any]] = {}
+    Keeps the most recent ``max_records`` tasks so a long-running server does not
+    grow without bound.
+    """
+
+    def __init__(self, max_records: int = 1000) -> None:
+        self._records: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._max_records = max_records
 
     async def initialize(self) -> None:
         """No-op: the in-memory store needs no setup."""
         return None
 
     async def set(self, task_id: str, record: dict[str, Any]) -> None:
-        """Store the record in the process dictionary."""
+        """Store the record in the process dictionary, evicting the oldest."""
         self._records[task_id] = record
+        self._records.move_to_end(task_id)
+        while len(self._records) > self._max_records:
+            self._records.popitem(last=False)
 
     async def get(self, task_id: str) -> dict[str, Any] | None:
         """Return the record from the process dictionary."""

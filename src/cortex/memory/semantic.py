@@ -41,7 +41,7 @@ class SemanticMemory(BaseMemory):
         episodic_memory: EpisodicMemory | None = None,
         collection_name: str = "cortex_semantic",
         client: Any | None = None,
-        consolidation_model: str = "llama3.1:8b",
+        consolidation_model: str = "qwen2.5:7b",
     ) -> None:
         self._chroma_path = Path(chroma_path)
         self._embed_model = embed_model

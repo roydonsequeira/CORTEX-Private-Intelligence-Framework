@@ -9,6 +9,7 @@ from typing import Any, cast
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
@@ -65,6 +66,10 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # Outermost: reject requests addressed to any other host name. A web page on
+    # an attacker's domain that re-resolves to 127.0.0.1 (DNS rebinding) is
+    # same-origin to itself, so CORS alone would not stop it from driving the agent.
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
     app.add_exception_handler(CortexModelError, _model_error_handler)
     app.add_exception_handler(Exception, _unhandled_error_handler)
     app.include_router(chat.router)
@@ -147,7 +152,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.agent_kernel = kernel
     app.state.supervisor_agent = supervisor
     app.state.started_at = time.monotonic()
-    app.state.task_queue = asyncio.Queue()
+    app.state.task_queue = asyncio.PriorityQueue()
     task_store = create_task_store(settings)
     await task_store.initialize()
     app.state.task_store = task_store
@@ -231,7 +236,7 @@ async def _warm_up(provider: OllamaProvider, settings: Settings) -> None:
 async def _task_worker(app: FastAPI) -> None:
     """Background worker for fire-and-forget agent tasks."""
     while True:
-        item = await app.state.task_queue.get()
+        _rank, _seq, item = await app.state.task_queue.get()
         task_id = item["task_id"]
         await app.state.task_store.set(task_id, {"task_id": task_id, "status": "running"})
         try:

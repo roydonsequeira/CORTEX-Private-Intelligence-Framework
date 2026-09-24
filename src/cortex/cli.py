@@ -67,6 +67,12 @@ def _serve(host: str | None, port: int | None, reload: bool) -> int:
             f"server) is running. Stop it, or use: cortex serve --port {bind_port + 1}"
         )
         return 1
+    if bind_host not in ("127.0.0.1", "localhost", "::1") and not settings.api_key:
+        print(
+            f"{_WARN} Binding to {bind_host} without an api_key exposes an agent that can "
+            "run code and read/write workspace files to your network. Set api_key "
+            "(or CORTEX_API_KEY) and add this host name to allowed_hosts."
+        )
     print(f"CORTEX API -> http://localhost:{bind_port}  (docs: http://localhost:{bind_port}/docs)")
     uvicorn.run(
         "cortex.api.server:create_app",

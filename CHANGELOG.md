@@ -6,8 +6,61 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- Requests to delete, wipe or erase files or folders are refused
+  deterministically: the planner knows no tool can delete, and a plan that
+  would destroy data is replaced with a refusal before anything runs.
+- The API is private by default: it binds to `127.0.0.1` (was `0.0.0.0`),
+  allows browser calls only from the local UI origin (CORS was `*`, so any web
+  page could drive a local agent that runs code), and rejects unknown `Host`
+  names to block DNS rebinding (`allowed_hosts`). The Docker stack publishes
+  every port, Ollama's included, on `127.0.0.1` only.
+- `POST /tools/{name}/execute`, which runs a tool directly and bypasses the
+  agent, is disabled unless `debug_tool_endpoint: true`.
+- `cortex serve` warns when binding beyond loopback without an `api_key`.
+- A plan that is a direct answer or a refusal now runs with no tools offered,
+  and at most three tool calls run per step. Under accumulated memory, a
+  "delete every file" prompt had produced 165 tool calls in one step.
+- Prompt-injection hardening: destructive requests are refused, tool and file
+  content is treated as untrusted data, `filesystem` never overwrites an
+  existing file without `overwrite: true` and never writes hidden paths, and
+  `doc_search` can only index files inside the workspace.
+
 ### Fixed
 
+- `doc_search` chunks CRLF (Windows) documents by paragraph. They had no
+  `"\n\n"` separators, so whole files were cut into blind 512-character windows
+  that split sentences and tables; the chunk listing the memory tiers now ranks
+  first for "which memory tiers does CORTEX have" instead of unrelated fragments.
+- "Write Python code ... and run it" runs the code instead of only showing it.
+- A run is bounded by `max_run_seconds` (120 s): a stuck request ends with a
+  best-effort answer instead of running for minutes.
+- Runs whose plan came from procedural hints no longer record a pattern, so an
+  unnecessary tool choice cannot reinforce itself.
+- The UI renders tables that small models wrap in a ```` ```markdown ```` fence.
+- Tests no longer share the in-process Chroma store, which made one
+  similarity test order-dependent.
+- Procedural memory no longer steers the planner toward tools from unrelated
+  tasks: only patterns from near-duplicate tasks (relevance >= 0.6,
+  `procedural_min_relevance`) become hints, and hints are advisory. Unrelated
+  file-writing patterns had turned a refusal into "Delete all files with the
+  filesystem tool", and one bad run could reinforce itself.
+- Models without tool support (e.g. gemma3, deepseek-r1) no longer fail every
+  request with HTTP 400; CORTEX retries without tools and remembers the model.
+- `/tasks` honours `priority` (high before normal before low, FIFO within a
+  level); the never-implemented `callback_url` field is removed. The in-memory
+  task store keeps the latest 1,000 tasks instead of growing without bound.
+- The request-completion log line keeps its `request_id`, and client-supplied
+  `X-Request-ID` values are accepted only as short plain tokens.
+- A tool argument named `tool_name` no longer crashes the registry.
+- Defaults: every chat role now uses `qwen2.5:7b` (one pull, tested end to end);
+  the Docker quick start pulled only two of the three configured models and
+  started degraded. `make pull-models` no longer needs `jq`, and scripts keep LF
+  line endings on Windows checkouts (`.gitattributes`).
+- The UI image receives `NEXT_PUBLIC_CORTEX_API_URL` at build time (Next.js
+  inlines it; the runtime variable had no effect), installs with `npm ci`, and
+  runs as the unprivileged `node` user.
 - Code sandbox now runs ordinary Python that defines a function and calls it, and
   code that uses tuple unpacking. `_run_code` used separate globals/locals dicts
   (so `def f(): ...; f()` raised `name 'f' is not defined`), and the
@@ -50,13 +103,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Planner, reflector, LATS and supervisor tolerate fenced or wrapped JSON from
   small models.
 
-### Security
-
-- Prompt-injection hardening: destructive requests are refused, tool and file
-  content is treated as untrusted data, `filesystem` never overwrites an
-  existing file without `overwrite: true` and never writes hidden paths, and
-  `doc_search` can only index files inside the workspace.
-
 ### Added
 
 - `cortex` command line: `cortex serve` (starts the API inside the installed
@@ -82,6 +128,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and quick live demos without a GPU.
 - README architecture diagram (Mermaid), a Demo section with a GIF slot, and a
   demo recording guide (`docs/DEMO_RECORDING.md`).
+
+### Changed
+
+- A pull-request template, a `cortex doctor` field in the bug report, and
+  least-privilege (`contents: read`) permissions for the CI workflow.
+- Package metadata: authors, project URLs, keywords and classifiers; the unused
+  `rich` dependency is removed.
+- README quick start covers the native install first (Docker needs an NVIDIA
+  GPU), and DEMO.md no longer relies on the debug tool endpoint.
 
 ## [1.0.0] - 2026-09-11
 

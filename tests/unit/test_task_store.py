@@ -62,3 +62,14 @@ def test_factory_selects_backend(tmp_path: Path) -> None:
 
     assert isinstance(create_task_store(memory_settings), InMemoryTaskStore)
     assert isinstance(create_task_store(sqlite_settings), SQLiteTaskStore)
+
+
+@pytest.mark.asyncio
+async def test_in_memory_store_evicts_oldest_records() -> None:
+    """The in-memory store keeps only the most recent records."""
+    store = InMemoryTaskStore(max_records=2)
+    for task_id in ("a", "b", "c"):
+        await store.set(task_id, {"task_id": task_id})
+
+    assert await store.get("a") is None
+    assert await store.get("c") == {"task_id": "c"}
