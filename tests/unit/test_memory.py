@@ -313,3 +313,13 @@ async def test_consolidation_skips_turns_without_self_statements(tmp_path: Path)
     )
     await semantic.consolidate("s")
     cast(AsyncMock, provider.complete).assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_working_memory_clear_session_reports_count() -> None:
+    memory = WorkingMemory()
+    await memory.store(_entry("a", session_id="s1"))
+    await memory.store(_entry("b", session_id="s1"))
+    await memory.store(_entry("c", session_id="s2"))
+    assert memory.clear_session("s1") == 2
+    assert [e.content for e in await memory.retrieve(MemoryQuery(text="", top_k=10))] == ["c"]
