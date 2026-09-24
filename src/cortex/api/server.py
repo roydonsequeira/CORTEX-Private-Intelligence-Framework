@@ -7,8 +7,9 @@ from contextlib import asynccontextmanager, suppress
 from typing import Any, cast
 
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from cortex.agent.kernel import AgentKernel
@@ -19,6 +20,8 @@ from cortex.api.middleware.telemetry import telemetry_middleware
 from cortex.api.routes import chat, health, memory, tasks, tools
 from cortex.api.task_store import create_task_store
 from cortex.config import get_settings
+from cortex.config.settings import Settings
+from cortex.exceptions import CortexModelError
 from cortex.memory.episodic import EpisodicMemory
 from cortex.memory.manager import MemoryManager
 from cortex.memory.procedural import ProceduralMemory
@@ -44,6 +47,17 @@ def create_app() -> FastAPI:
         lifespan=_lifespan,
     )
     settings = get_settings()
+    # add_middleware wraps outward, so the last one added runs first. CORS is
+    # added last so that 401/429 responses from the inner layers still carry
+    # CORS headers — otherwise the browser reports them as opaque network errors.
+    app.middleware("http")(telemetry_middleware)
+    app.add_middleware(APIKeyMiddleware, api_key=settings.api_key)
+    app.add_middleware(
+        RateLimitMiddleware,
+        enabled=settings.rate_limit.enabled,
+        requests_per_minute=settings.rate_limit.requests_per_minute,
+        chat_requests_per_minute=settings.rate_limit.chat_requests_per_minute,
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -51,14 +65,8 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.add_middleware(
-        RateLimitMiddleware,
-        enabled=settings.rate_limit.enabled,
-        requests_per_minute=settings.rate_limit.requests_per_minute,
-        chat_requests_per_minute=settings.rate_limit.chat_requests_per_minute,
-    )
-    app.add_middleware(APIKeyMiddleware, api_key=settings.api_key)
-    app.middleware("http")(telemetry_middleware)
+    app.add_exception_handler(CortexModelError, _model_error_handler)
+    app.add_exception_handler(Exception, _unhandled_error_handler)
     app.include_router(chat.router)
     app.include_router(tasks.router)
     app.include_router(memory.router)
@@ -66,6 +74,20 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     FastAPIInstrumentor.instrument_app(app)
     return app
+
+
+async def _model_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Ollama problems are a dependency outage (503), with the actionable message."""
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+async def _unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Return a JSON error body (not a bare 'Internal Server Error') for any bug."""
+    logger.exception("unhandled_error", path=request.url.path, error=str(exc))
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal error: {type(exc).__name__}: {exc}"},
+    )
 
 
 @asynccontextmanager
@@ -76,9 +98,13 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     setup_tracing("cortex-api", settings.otel_endpoint, enabled=settings.telemetry_enabled)
     setup_metrics(settings.otel_endpoint if settings.telemetry_enabled else None)
 
-    provider = OllamaProvider(settings.ollama_base_url)
-    if not await provider.health_check():
-        logger.critical("ollama_unhealthy_startup", base_url=settings.ollama_base_url)
+    provider = OllamaProvider(
+        settings.ollama_base_url,
+        timeout=settings.ollama_timeout_seconds,
+        num_ctx=settings.ollama_num_ctx,
+        keep_alive=settings.ollama_keep_alive,
+    )
+    await _check_models(provider, settings)
 
     episodic = EpisodicMemory(settings.db_path)
     semantic = SemanticMemory(
@@ -89,7 +115,14 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         consolidation_model=settings.ollama_model,
     )
     procedural = ProceduralMemory(settings.chroma_path, settings.embed_model, provider)
-    memory_manager = MemoryManager(WorkingMemory(), episodic, semantic, procedural)
+    memory_manager = MemoryManager(
+        WorkingMemory(),
+        episodic,
+        semantic,
+        procedural,
+        consolidation_enabled=settings.memory_consolidation,
+        min_relevance=settings.semantic_min_relevance,
+    )
     await memory_manager.initialize()
 
     router = ModelRouter(provider, settings)
@@ -121,18 +154,78 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.shutting_down = False
     app.state.in_flight_runs = 0
     app.state.task_worker = asyncio.create_task(_task_worker(app))
+    warmup = (
+        asyncio.create_task(_warm_up(provider, settings))
+        if settings.warmup_on_startup
+        else None
+    )
+    logger.info(
+        "cortex_ready",
+        model=settings.ollama_model,
+        tools=[schema.name for schema in tool_registry.list_tools()],
+    )
 
     try:
         yield
     finally:
         logger.info("CORTEX shutting down gracefully")
         app.state.shutting_down = True
+        if warmup is not None and not warmup.done():
+            warmup.cancel()
         await _wait_for_in_flight(app)
         app.state.task_worker.cancel()
         with suppress(asyncio.CancelledError):
             await app.state.task_worker
+        await memory_manager.drain()
         await provider.aclose()
         shutdown_tracing()
+
+
+async def _check_models(provider: OllamaProvider, settings: Settings) -> None:
+    """Log, at startup, exactly which configured models are missing and how to fix it."""
+    if not await provider.health_check():
+        logger.critical(
+            "ollama_unreachable",
+            base_url=settings.ollama_base_url,
+            fix="Start Ollama (`ollama serve` or the Ollama app), then restart CORTEX.",
+        )
+        return
+    try:
+        available = set(await provider.list_models())
+    except CortexModelError as exc:
+        logger.warning("ollama_list_models_failed", error=str(exc))
+        return
+    for model in missing_models(settings, available):
+        logger.critical("model_not_pulled", model=model, fix=f"ollama pull {model}")
+
+
+def missing_models(settings: Settings, available: set[str]) -> list[str]:
+    """Return configured models that Ollama does not have (":latest" is implied)."""
+    names = available | {name.removesuffix(":latest") for name in available}
+    configured = dict.fromkeys(
+        [
+            settings.ollama_model,
+            settings.reasoning_model,
+            settings.code_model,
+            settings.embed_model,
+        ]
+    )
+    return [model for model in configured if model not in names]
+
+
+async def _warm_up(provider: OllamaProvider, settings: Settings) -> None:
+    """Load the chat and embedding models in the background so the first request is fast."""
+    started = time.monotonic()
+    try:
+        await provider.warmup(settings.ollama_model)
+        await provider.embed(settings.embed_model, "warm-up")
+        logger.info(
+            "models_warm",
+            model=settings.ollama_model,
+            seconds=round(time.monotonic() - started, 1),
+        )
+    except Exception as exc:  # warm-up is an optimisation, never fatal
+        logger.warning("model_warmup_failed", error=str(exc))
 
 
 async def _task_worker(app: FastAPI) -> None:

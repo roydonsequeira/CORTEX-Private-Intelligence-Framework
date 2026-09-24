@@ -1,5 +1,6 @@
 """MemoryManager — unified facade over CORTEX's four memory tiers."""
 
+import asyncio
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -10,8 +11,14 @@ from cortex.memory.episodic import EpisodicMemory
 from cortex.memory.procedural import ProceduralMemory, ToolPattern
 from cortex.memory.semantic import SemanticMemory
 from cortex.memory.working import WorkingMemory
+from cortex.models.provider import Message
 
 logger = structlog.get_logger(__name__)
+
+# Characters of each replayed history message; keeps long answers or pasted
+# documents from crowding the current request out of the context window.
+_MAX_HISTORY_CHARS = 1500
+_SEMANTIC_CONTEXT_TOP_K = 3
 
 
 class MemoryManager:
@@ -23,11 +30,16 @@ class MemoryManager:
         episodic: EpisodicMemory,
         semantic: SemanticMemory,
         procedural: ProceduralMemory,
+        consolidation_enabled: bool = True,
+        min_relevance: float = 0.0,
     ) -> None:
         self._working = working
         self._episodic = episodic
         self._semantic = semantic
         self._procedural = procedural
+        self._consolidation_enabled = consolidation_enabled
+        self._min_relevance = min_relevance
+        self._background: set[asyncio.Task[None]] = set()
 
     async def initialize(self) -> None:
         """Initialize all persistent memory stores."""
@@ -57,23 +69,69 @@ class MemoryManager:
         await self._working.store(working_entry)
         await self._episodic.store(episodic_entry)
 
+    async def recent_history(self, session_id: str, max_turns: int = 6) -> list[Message]:
+        """Return the last ``max_turns`` user/assistant exchanges of a session.
+
+        Tool messages are omitted: they only make sense next to the tool call that
+        produced them, and the assistant's final answer already summarises them.
+        """
+        if max_turns <= 0:
+            return []
+        history = await self._episodic.get_session_history(session_id)
+        dialogue = [m for m in history if m.role in ("user", "assistant") and m.content.strip()]
+        recent = dialogue[-max_turns * 2 :]
+        return [
+            Message(role=m.role, content=_clip(m.content, _MAX_HISTORY_CHARS)) for m in recent
+        ]
+
     async def retrieve_context(self, query: str, session_id: str) -> str:
-        """Query episodic and semantic memory and return a formatted context block."""
-        memory_query = MemoryQuery(text=query, top_k=5, session_id=session_id)
-        episodic = await self._episodic.retrieve(memory_query)
-        semantic = await self._semantic.retrieve(
-            MemoryQuery(text=query, top_k=5, memory_types=["semantic"])
+        """Return long-term (semantic) memories relevant to the query as a context block.
+
+        The current session's own dialogue is replayed separately by
+        ``recent_history``; this block carries facts learned in other sessions.
+        """
+        entries = await self._semantic.retrieve(
+            MemoryQuery(text=query, top_k=_SEMANTIC_CONTEXT_TOP_K, memory_types=["semantic"])
         )
-        entries = _dedupe(episodic + semantic)
+        relevant = [
+            entry
+            for entry in entries
+            if float(entry.metadata.get("relevance_score", 1.0)) >= self._min_relevance
+        ]
+        entries = _dedupe(relevant)
         if not entries:
             return ""
-        lines = [f"- [{entry.memory_type}] {entry.content}" for entry in entries]
-        return "--- Relevant Memory ---\n" + "\n".join(lines) + "\n---"
+        lines = [f"- {entry.content}" for entry in entries]
+        return (
+            "Long-term memory (facts from earlier sessions — use only if relevant):\n"
+            + "\n".join(lines)
+        )
 
     async def end_session(self, session_id: str) -> None:
-        """Consolidate session memory and clear working store."""
-        await self._semantic.consolidate(session_id)
-        self._working.clear()
+        """Clear this session's working memory and consolidate it in the background.
+
+        Consolidation calls the model, so it never runs on the request path: the
+        answer is returned immediately and facts are extracted afterwards.
+        """
+        self._working.clear_session(session_id)
+        if not self._consolidation_enabled:
+            return
+        task = asyncio.create_task(self._consolidate(session_id))
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+
+    async def _consolidate(self, session_id: str) -> None:
+        """Run semantic consolidation, logging (never raising) on failure."""
+        try:
+            await self._semantic.consolidate(session_id)
+        except Exception as exc:  # consolidation is best-effort
+            logger.warning("memory_consolidation_failed", session_id=session_id, error=str(exc))
+
+    async def drain(self, timeout_seconds: float = 10.0) -> None:
+        """Wait briefly for background consolidation to finish (used at shutdown)."""
+        if not self._background:
+            return
+        await asyncio.wait(set(self._background), timeout=timeout_seconds)
 
     async def store_tool_pattern(
         self,
@@ -97,6 +155,11 @@ class MemoryManager:
     ) -> list[ToolPattern]:
         """Return learned tool-use patterns for similar tasks."""
         return await self._procedural.retrieve_patterns(task, top_k=top_k)
+
+
+def _clip(text: str, limit: int) -> str:
+    """Truncate text to ``limit`` characters with a marker."""
+    return text if len(text) <= limit else text[:limit] + " …[truncated]"
 
 
 def _dedupe(entries: list[MemoryEntry]) -> list[MemoryEntry]:

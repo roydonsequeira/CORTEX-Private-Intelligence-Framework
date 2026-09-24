@@ -10,9 +10,10 @@ import pytest
 from cortex.agent.kernel import AgentKernel, AgentState
 from cortex.agent.loop import LATSLoop
 from cortex.config.settings import Settings
+from cortex.exceptions import CortexModelError
 from cortex.memory.manager import MemoryManager
 from cortex.memory.procedural import ToolPattern
-from cortex.models.provider import ModelResponse, StreamChunk
+from cortex.models.provider import Message, ModelResponse, StreamChunk
 from cortex.models.router import ModelRouter
 from cortex.tools.base import ToolResult
 from cortex.tools.registry import ToolRegistry
@@ -35,14 +36,16 @@ def _mock_model_response(content: str) -> ModelResponse:
     )
 
 
-def _mock_tool_call_response(tool_name: str = "dummy") -> ModelResponse:
+def _mock_tool_call_response(
+    tool_name: str = "dummy", arguments: dict[str, Any] | None = None
+) -> ModelResponse:
     """Simulate an executor step that calls a tool (keeps loop alive)."""
     raw: dict[str, Any] = {
         "model": "llama3.1:8b",
         "message": {
             "role": "assistant",
             "content": "",
-            "tool_calls": [{"function": {"name": tool_name, "arguments": {}}}],
+            "tool_calls": [{"function": {"name": tool_name, "arguments": arguments or {}}}],
         },
         "prompt_eval_count": 5,
         "eval_count": 10,
@@ -57,6 +60,16 @@ def _mock_tool_call_response(tool_name: str = "dummy") -> ModelResponse:
     )
 
 
+def _tool_result(success: bool = True) -> ToolResult:
+    return ToolResult(
+        tool_name="dummy",
+        success=success,
+        output="tool ok" if success else "",
+        error=None if success else "tool broke",
+        execution_time_ms=1.0,
+    )
+
+
 def _make_kernel(settings: Settings | None = None) -> tuple[AgentKernel, MagicMock, MagicMock]:
     router = MagicMock(spec=ModelRouter)
     router.route.return_value = "llama3.1:8b"
@@ -65,17 +78,11 @@ def _make_kernel(settings: Settings | None = None) -> tuple[AgentKernel, MagicMo
     tool_registry = MagicMock(spec=ToolRegistry)
     tool_registry.list_tools.return_value = []
     tool_registry.to_ollama_tools.return_value = []
-    tool_registry.execute = AsyncMock(
-        return_value=ToolResult(
-            tool_name="dummy",
-            success=True,
-            output="tool ok",
-            execution_time_ms=1.0,
-        )
-    )
+    tool_registry.execute = AsyncMock(return_value=_tool_result())
 
     memory_manager = MagicMock(spec=MemoryManager)
     memory_manager.retrieve_context = AsyncMock(return_value="")
+    memory_manager.recent_history = AsyncMock(return_value=[])
     memory_manager.store_turn = AsyncMock()
     memory_manager.end_session = AsyncMock()
     memory_manager.retrieve_tool_patterns = AsyncMock(return_value=[])
@@ -84,6 +91,7 @@ def _make_kernel(settings: Settings | None = None) -> tuple[AgentKernel, MagicMo
     cfg = settings or Settings(
         ollama_base_url="http://fake:11434",
         max_agent_steps=10,
+        stream_tokens=False,
     )
 
     kernel = AgentKernel(
@@ -95,55 +103,71 @@ def _make_kernel(settings: Settings | None = None) -> tuple[AgentKernel, MagicMo
     return kernel, router, tool_registry
 
 
+def _settings(**overrides: Any) -> Settings:
+    values: dict[str, Any] = {
+        "ollama_base_url": "http://fake:11434",
+        "max_agent_steps": 10,
+        "stream_tokens": False,
+    }
+    values.update(overrides)
+    return Settings(**values)
+
+
+def _drain(queue: asyncio.Queue[dict[str, Any]]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+    return events
+
+
 @pytest.mark.asyncio
 async def test_run_trivial_task_returns_complete() -> None:
     """A task where the model returns a direct answer completes with status=complete."""
     kernel, router, _ = _make_kernel()
-
     router.complete.side_effect = [
         _mock_model_response('["Answer the user directly"]'),
         _mock_model_response("The answer is 42."),
-        _mock_model_response('{"progress": true}'),
     ]
 
     state = await kernel.run("What is 6 times 7?")
 
     assert state.status == "complete"
-    assert state.final_answer is not None
-    assert state.steps_taken >= 1
+    assert state.final_answer == "The answer is 42."
+    assert state.steps_taken == 1
 
 
 @pytest.mark.asyncio
-async def test_run_exhausted_steps_returns_failed() -> None:
-    """When max_steps is reached without completion, status is set to failed."""
-    kernel, router, _ = _make_kernel(Settings(ollama_base_url="http://fake:11434", max_agent_steps=2))
-
+async def test_run_exhausted_steps_synthesizes_best_effort_answer() -> None:
+    """At the step limit the run is failed but still returns a synthesized answer."""
+    kernel, router, registry = _make_kernel(_settings(max_agent_steps=2))
     router.complete.side_effect = [
         _mock_model_response('["step one", "step two"]'),
-        _mock_tool_call_response("dummy"),
-        _mock_model_response('{"progress": true}'),
-        _mock_tool_call_response("dummy"),
-        _mock_model_response('{"progress": true}'),
+        _mock_tool_call_response("dummy", {"n": 1}),
+        _mock_tool_call_response("dummy", {"n": 2}),
+        _mock_model_response("Best effort: partial result."),
     ]
 
     state = await kernel.run("An impossible task that takes many steps")
 
     assert state.status == "failed"
+    assert state.final_answer == "Best effort: partial result."
+    assert registry.execute.await_count == 2
+    # the synthesis call is made without tools
+    assert router.complete.await_args_list[-1].kwargs.get("tools") is None
 
 
 @pytest.mark.asyncio
-async def test_run_creates_unique_session_id_when_none_given() -> None:
-    """run() generates a session_id when none is provided."""
+async def test_run_creates_uuid_session_id_when_none_given() -> None:
+    """run() generates a dashed UUID so it round-trips through the API unchanged."""
     kernel, router, _ = _make_kernel()
     router.complete.side_effect = [
         _mock_model_response('["single step"]'),
         _mock_model_response("Done."),
-        _mock_model_response('{"progress": true}'),
     ]
 
     state = await kernel.run("test input")
-    assert state.session_id
-    assert len(state.session_id) == 32
+    assert len(state.session_id) == 36
+    assert state.session_id.count("-") == 4
 
 
 @pytest.mark.asyncio
@@ -153,7 +177,6 @@ async def test_run_uses_provided_session_id() -> None:
     router.complete.side_effect = [
         _mock_model_response('["step"]'),
         _mock_model_response("Result."),
-        _mock_model_response('{"progress": true}'),
     ]
 
     state = await kernel.run("task", session_id="my-session-abc")
@@ -161,35 +184,52 @@ async def test_run_uses_provided_session_id() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_reflector_halts_on_no_progress_when_lats_disabled() -> None:
-    """Reflector stops the loop after two non-progress steps when LATS is disabled."""
-    kernel, router, _ = _make_kernel(
-        Settings(ollama_base_url="http://fake:11434", max_agent_steps=20)
-    )
+async def test_successful_tool_step_skips_reflector_model_call() -> None:
+    """A clean tool step counts as progress without spending a model call."""
+    kernel, router, _ = _make_kernel()
+    router.complete.side_effect = [
+        _mock_model_response('["use the tool"]'),
+        _mock_tool_call_response("dummy"),
+        _mock_model_response("Final answer."),
+    ]
 
+    state = await kernel.run("use a tool")
+
+    assert state.status == "complete"
+    assert router.complete.await_count == 3  # planner, tool step, answer — no reflector
+
+
+@pytest.mark.asyncio
+async def test_run_reflector_halts_on_no_progress_when_lats_disabled() -> None:
+    """Two failed, non-progress steps stall the loop; a best-effort answer follows."""
+    kernel, router, registry = _make_kernel(_settings(max_agent_steps=20))
+    registry.execute = AsyncMock(return_value=_tool_result(success=False))
     router.complete.side_effect = [
         _mock_model_response('["step one", "step two"]'),
-        _mock_tool_call_response("dummy"),
+        _mock_tool_call_response("dummy", {"n": 1}),
         _mock_model_response('{"progress": false}'),
-        _mock_tool_call_response("dummy"),
+        _mock_tool_call_response("dummy", {"n": 2}),
         _mock_model_response('{"progress": false}'),
+        _mock_model_response("I could not finish, but here is what I know."),
     ]
 
     state = await kernel.run("An unresolvable task", _allow_lats=False)
+
     assert state.status == "failed"
+    assert state.stalled is True
+    assert state.final_answer == "I could not finish, but here is what I know."
 
 
 @pytest.mark.asyncio
 async def test_run_reflector_falls_back_to_lats(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reflector failure falls back to LATS before returning failed."""
-    kernel, router, _ = _make_kernel(
-        Settings(ollama_base_url="http://fake:11434", max_agent_steps=20)
-    )
+    """A stalled ReAct loop escalates to LATS and returns its completed state."""
+    kernel, router, registry = _make_kernel(_settings(max_agent_steps=20))
+    registry.execute = AsyncMock(return_value=_tool_result(success=False))
     router.complete.side_effect = [
         _mock_model_response('["step one", "step two"]'),
-        _mock_tool_call_response("dummy"),
+        _mock_tool_call_response("dummy", {"n": 1}),
         _mock_model_response('{"progress": false}'),
-        _mock_tool_call_response("dummy"),
+        _mock_tool_call_response("dummy", {"n": 2}),
         _mock_model_response('{"progress": false}'),
     ]
     lats_state = AgentState(
@@ -204,19 +244,178 @@ async def test_run_reflector_falls_back_to_lats(monkeypatch: pytest.MonkeyPatch)
     state = await kernel.run("An unresolvable task")
 
     assert state is lats_state
+    assert state.final_answer == "lats recovered"
     run_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_lats_escalation_timeout_falls_back_to_synthesis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If LATS exceeds its time budget, the run still ends with an answer."""
+    settings = _settings(max_agent_steps=20)
+    settings.lats.escalation_timeout_seconds = 0.05
+    kernel, router, registry = _make_kernel(settings)
+    registry.execute = AsyncMock(return_value=_tool_result(success=False))
+    router.complete.side_effect = [
+        _mock_model_response('["step"]'),
+        _mock_tool_call_response("dummy", {"n": 1}),
+        _mock_model_response('{"progress": false}'),
+        _mock_tool_call_response("dummy", {"n": 2}),
+        _mock_model_response('{"progress": false}'),
+        _mock_model_response("Synthesized after timeout."),
+    ]
+
+    async def slow_lats(*_args: Any, **_kwargs: Any) -> AgentState:
+        await asyncio.sleep(5)
+        raise AssertionError("should have been cancelled")
+
+    monkeypatch.setattr(LATSLoop, "run", slow_lats)
+
+    state = await kernel.run("stuck task")
+
+    assert state.status == "failed"
+    assert state.final_answer == "Synthesized after timeout."
+
+
+@pytest.mark.asyncio
+async def test_duplicate_tool_call_is_not_re_executed() -> None:
+    """An identical repeated tool call returns the earlier result instead of re-running."""
+    kernel, router, registry = _make_kernel()
+    router.complete.side_effect = [
+        _mock_model_response('["compute"]'),
+        _mock_tool_call_response("dummy", {"x": 1}),
+        _mock_tool_call_response("dummy", {"x": 1}),
+        _mock_model_response('{"progress": true}'),
+        _mock_model_response("The result is tool ok."),
+    ]
+
+    state = await kernel.run("compute something")
+
+    assert state.status == "complete"
+    assert registry.execute.await_count == 1
+    assert state.repeated_calls == 1
+    duplicate_reply = [m for m in state.messages if m.role == "tool"][-1].content
+    assert "already ran this exact tool call" in duplicate_reply
+    assert "tool ok" in duplicate_reply
+
+
+@pytest.mark.asyncio
+async def test_tool_call_message_precedes_tool_result() -> None:
+    """The assistant's tool call is kept in context, paired with its result."""
+    kernel, router, _ = _make_kernel()
+    router.complete.side_effect = [
+        _mock_model_response('["use tool"]'),
+        _mock_tool_call_response("dummy", {"q": "x"}),
+        _mock_model_response("Answer."),
+    ]
+
+    state = await kernel.run("task")
+
+    roles = [m.role for m in state.messages]
+    call_index = roles.index("tool") - 1
+    call = state.messages[call_index]
+    assert call.role == "assistant"
+    assert call.tool_calls is not None and call.tool_calls[0].name == "dummy"
+    assert call.to_ollama()["tool_calls"][0]["function"]["arguments"] == {"q": "x"}
+    assert state.messages[call_index + 1].tool_name == "dummy"
+
+
+@pytest.mark.asyncio
+async def test_session_history_is_replayed_and_turns_are_stored() -> None:
+    """Prior turns are sent to the model; the new user turn and answer are persisted."""
+    kernel, router, _ = _make_kernel()
+    memory_manager = cast(MagicMock, kernel._memory_manager)
+    memory_manager.recent_history = AsyncMock(
+        return_value=[
+            Message(role="user", content="My name is Roydon."),
+            Message(role="assistant", content="Nice to meet you, Roydon."),
+        ]
+    )
+    router.complete.side_effect = [
+        _mock_model_response('["Answer from the conversation"]'),
+        _mock_model_response("Your name is Roydon."),
+    ]
+
+    state = await kernel.run("What is my name?", session_id="s-1")
+
+    executor_messages = router.complete.await_args_list[1].args[1]
+    contents = [m.content for m in executor_messages]
+    assert "My name is Roydon." in contents
+    assert contents[-1] == "What is my name?"
+    planner_prompt = router.complete.await_args_list[0].args[1][-1].content
+    assert "My name is Roydon." in planner_prompt
+    stored = [c.args for c in memory_manager.store_turn.await_args_list]
+    assert ("s-1", "user", "What is my name?") in stored
+    assert ("s-1", "assistant", "Your name is Roydon.") in stored
+    assert state.final_answer == "Your name is Roydon."
+
+
+@pytest.mark.asyncio
+async def test_memory_failures_do_not_fail_the_run() -> None:
+    """Broken memory backends degrade to no context instead of crashing."""
+    kernel, router, _ = _make_kernel()
+    memory_manager = cast(MagicMock, kernel._memory_manager)
+    memory_manager.retrieve_context = AsyncMock(side_effect=RuntimeError("chroma down"))
+    memory_manager.recent_history = AsyncMock(side_effect=RuntimeError("sqlite locked"))
+    memory_manager.store_turn = AsyncMock(side_effect=RuntimeError("disk full"))
+    memory_manager.end_session = AsyncMock(side_effect=RuntimeError("boom"))
+    router.complete.side_effect = [
+        _mock_model_response('["answer"]'),
+        _mock_model_response("Still answered."),
+    ]
+
+    state = await kernel.run("hello there")
+
+    assert state.status == "complete"
+    assert state.final_answer == "Still answered."
+
+
+@pytest.mark.asyncio
+async def test_model_error_returns_failed_state_with_error_event() -> None:
+    """An Ollama outage ends the run cleanly with an actionable error, not an exception."""
+    kernel, router, _ = _make_kernel()
+    router.complete.side_effect = CortexModelError("Cannot reach Ollama at http://fake:11434.")
+
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    state = await kernel.run("hello", event_queue=queue)
+
+    events = _drain(queue)
+    types = [e["type"] for e in events]
+    assert state.status == "failed"
+    assert "Cannot reach Ollama" in (state.final_answer or "")
+    assert "error" in types
+    assert types[-1] == "done"
+    assert "token" not in types
+    # the infrastructure error is not stored as the assistant's reply
+    memory_manager = cast(MagicMock, kernel._memory_manager)
+    stored_roles = [c.args[1] for c in memory_manager.store_turn.await_args_list]
+    assert "assistant" not in stored_roles
+
+
+@pytest.mark.asyncio
+async def test_empty_model_reply_is_retried_without_tools() -> None:
+    """A blank reply with no tool call triggers a synthesis call instead of a blank answer."""
+    kernel, router, _ = _make_kernel()
+    router.complete.side_effect = [
+        _mock_model_response('["answer"]'),
+        _mock_model_response("   "),
+        _mock_model_response("Recovered answer."),
+    ]
+
+    state = await kernel.run("question")
+
+    assert state.status == "complete"
+    assert state.final_answer == "Recovered answer."
 
 
 @pytest.mark.asyncio
 async def test_run_records_tool_pattern_on_success() -> None:
     """A successful run that used a tool stores a procedural pattern of that sequence."""
-    kernel, router, _ = _make_kernel(
-        Settings(ollama_base_url="http://fake:11434", max_agent_steps=10, stream_tokens=False)
-    )
+    kernel, router, _ = _make_kernel()
     router.complete.side_effect = [
         _mock_model_response('["use the tool", "answer"]'),
         _mock_tool_call_response("dummy"),
-        _mock_model_response('{"progress": true}'),
         _mock_model_response("Final answer."),
     ]
 
@@ -234,9 +433,7 @@ async def test_run_records_tool_pattern_on_success() -> None:
 @pytest.mark.asyncio
 async def test_run_threads_pattern_hint_into_planner() -> None:
     """A retrieved pattern is threaded into the planner prompt as a hint."""
-    kernel, router, _ = _make_kernel(
-        Settings(ollama_base_url="http://fake:11434", max_agent_steps=5, stream_tokens=False)
-    )
+    kernel, router, _ = _make_kernel(_settings(max_agent_steps=5))
     memory_manager = cast(MagicMock, kernel._memory_manager)
     memory_manager.retrieve_tool_patterns = AsyncMock(
         return_value=[
@@ -261,19 +458,24 @@ async def test_run_threads_pattern_hint_into_planner() -> None:
     assert "similar task used these tools" in planner_user_content
 
 
-def _drain(queue: asyncio.Queue[dict[str, Any]]) -> list[dict[str, Any]]:
-    events: list[dict[str, Any]] = []
-    while not queue.empty():
-        events.append(queue.get_nowait())
-    return events
+@pytest.mark.asyncio
+async def test_planner_accepts_fenced_json() -> None:
+    """A plan wrapped in a ```json fence (typical of small models) is parsed."""
+    kernel, router, _ = _make_kernel()
+    router.complete.side_effect = [
+        _mock_model_response('Here is the plan:\n```json\n["Compute it with python_exec"]\n```'),
+        _mock_model_response("42"),
+    ]
+
+    state = await kernel.run("compute")
+
+    assert state.plan == ["Compute it with python_exec"]
 
 
 @pytest.mark.asyncio
 async def test_run_streams_real_tokens_before_done() -> None:
     """With streaming on and a queue, token events arrive as the model generates."""
-    kernel, router, _ = _make_kernel(
-        Settings(ollama_base_url="http://fake:11434", max_agent_steps=5, stream_tokens=True)
-    )
+    kernel, router, _ = _make_kernel(_settings(max_agent_steps=5, stream_tokens=True))
     router.complete.side_effect = [_mock_model_response('["Answer the user directly"]')]
 
     async def fake_stream(*_args: Any, **_kwargs: Any) -> AsyncIterator[StreamChunk]:
@@ -296,6 +498,36 @@ async def test_run_streams_real_tokens_before_done() -> None:
     # tokens are emitted before the done event, not chunked after it
     assert types.index("token") < types.index("done")
     assert "".join(e["value"] for e in token_events) == "Hello, world!"
+
+
+@pytest.mark.asyncio
+async def test_streamed_preamble_before_tool_call_is_reset() -> None:
+    """Text streamed before a tool call is retracted with a token_reset event."""
+    kernel, router, _ = _make_kernel(_settings(max_agent_steps=5, stream_tokens=True))
+    router.complete.side_effect = [_mock_model_response('["use the tool"]')]
+    calls = {"n": 0}
+
+    async def fake_stream(*_args: Any, **_kwargs: Any) -> AsyncIterator[StreamChunk]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            yield StreamChunk(content="Let me check. ")
+            yield StreamChunk(
+                done=True,
+                tool_calls=[{"function": {"name": "dummy", "arguments": {}}}],
+            )
+        else:
+            yield StreamChunk(content="Answer.")
+            yield StreamChunk(done=True)
+
+    router.stream_complete = fake_stream
+
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    state = await kernel.run("task", event_queue=queue)
+
+    types = [e["type"] for e in _drain(queue)]
+    assert "token_reset" in types
+    assert types.index("token_reset") < types.index("tool_call")
+    assert state.final_answer == "Answer."
 
 
 @pytest.mark.asyncio

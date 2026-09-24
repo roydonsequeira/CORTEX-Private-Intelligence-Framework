@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -150,3 +151,96 @@ async def test_memory_manager_retrieve_context_dedupes(tmp_path: Path) -> None:
 
     context = await manager.retrieve_context("project", "s1")
     assert context.count("The project is called CORTEX.") == 1
+
+
+@pytest.mark.asyncio
+async def test_semantic_and_procedural_share_one_chroma_client(tmp_path: Path) -> None:
+    """Two PersistentClients on one path corrupt each other's HNSW view (chromadb 1.5
+    raises "Nothing found on disk"); both tiers must reuse a single client."""
+    provider = _mock_provider()
+    semantic = SemanticMemory(tmp_path / "chroma", "nomic-embed-text", provider)
+    procedural = ProceduralMemory(tmp_path / "chroma", "nomic-embed-text", provider)
+    await semantic.initialize()
+    await procedural.initialize()
+    assert semantic._client is procedural._client
+
+    for i in range(10):
+        await procedural.store(_entry(f"task {i}", "procedural", tool_sequence=["calc"]))
+        await semantic.store(_entry(f"fact {i}", "semantic"))
+        assert await procedural.retrieve(MemoryQuery(text="task", top_k=3))
+        assert await semantic.retrieve(MemoryQuery(text="fact", top_k=3))
+
+
+def _manager(tmp_path: Path, provider: OllamaProvider, semantic: SemanticMemory) -> MemoryManager:
+    episodic = EpisodicMemory(tmp_path / "cortex.db")
+    procedural = ProceduralMemory(
+        tmp_path / "procedural", "nomic-embed-text", provider, client=chromadb.EphemeralClient()
+    )
+    return MemoryManager(WorkingMemory(), episodic, semantic, procedural)
+
+
+@pytest.mark.asyncio
+async def test_recent_history_returns_dialogue_without_tool_messages(tmp_path: Path) -> None:
+    """recent_history replays user/assistant turns in order and drops tool output."""
+    provider = _mock_provider()
+    semantic = SemanticMemory(
+        tmp_path / "semantic", "nomic-embed-text", provider, client=chromadb.EphemeralClient()
+    )
+    manager = _manager(tmp_path, provider, semantic)
+    await manager.initialize()
+    await manager.store_turn("s1", "user", "My name is Roydon.")
+    await manager.store_turn("s1", "tool", "[python_exec] 42")
+    await manager.store_turn("s1", "assistant", "Nice to meet you, Roydon.")
+    await manager.store_turn("s2", "user", "other session")
+
+    history = await manager.recent_history("s1", max_turns=5)
+
+    assert [(m.role, m.content) for m in history] == [
+        ("user", "My name is Roydon."),
+        ("assistant", "Nice to meet you, Roydon."),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_consolidation_is_deduplicated_and_skips_trivial_turns(tmp_path: Path) -> None:
+    """Re-learning a fact upserts it; greetings are not consolidated at all."""
+    provider = _mock_provider()
+    episodic = EpisodicMemory(tmp_path / "cortex.db")
+    await episodic.initialize()
+    semantic = SemanticMemory(
+        tmp_path / "chroma",
+        "nomic-embed-text",
+        provider,
+        episodic_memory=episodic,
+        client=chromadb.EphemeralClient(),
+        collection_name="dedupe_test",
+    )
+    await episodic.store(_entry("hi", "episodic", session_id="greet", role="user"))
+    await semantic.consolidate("greet")
+    cast(AsyncMock, provider.complete).assert_not_awaited()
+
+    await episodic.store(
+        _entry("I prefer local AI for privacy.", "episodic", session_id="s1", role="user")
+    )
+    await semantic.consolidate("s1")
+    await semantic.consolidate("s1")
+    assert semantic._collection is not None
+    assert semantic._collection.count() == 2  # two distinct facts, each stored once
+
+
+@pytest.mark.asyncio
+async def test_end_session_consolidates_in_background(tmp_path: Path) -> None:
+    """end_session returns immediately; consolidation errors are swallowed."""
+    provider = _mock_provider()
+    semantic = SemanticMemory(
+        tmp_path / "semantic", "nomic-embed-text", provider, client=chromadb.EphemeralClient()
+    )
+    consolidate = AsyncMock(side_effect=RuntimeError("model offline"))
+    semantic.consolidate = consolidate  # type: ignore[method-assign]
+    manager = _manager(tmp_path, provider, semantic)
+    await manager.initialize()
+
+    await manager.end_session("s1")
+    await manager.drain()
+
+    consolidate.assert_awaited_once_with("s1")

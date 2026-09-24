@@ -23,6 +23,7 @@ class _FakeKernel:
         user_input: str,
         session_id: str | None = None,
         event_queue: asyncio.Queue[dict[str, Any]] | None = None,
+        **_: Any,
     ) -> AgentState:
         sid = session_id or "test-session"
         if event_queue is not None:
@@ -102,7 +103,14 @@ async def test_health_returns_expected_structure(app: FastAPI) -> None:
         response = await client.get("/health")
 
     assert response.status_code == 200
-    assert set(response.json()) == {"status", "ollama", "chromadb", "uptime_seconds"}
+    assert set(response.json()) == {
+        "status",
+        "ollama",
+        "chromadb",
+        "uptime_seconds",
+        "model",
+        "missing_models",
+    }
 
 
 @pytest.mark.asyncio

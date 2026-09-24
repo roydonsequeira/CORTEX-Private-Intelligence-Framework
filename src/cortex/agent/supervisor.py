@@ -1,7 +1,6 @@
 """Supervisor-worker orchestration for parallel multi-agent tasks."""
 
 import asyncio
-import json
 from collections.abc import Callable
 from typing import Literal
 from uuid import uuid4
@@ -10,6 +9,7 @@ import structlog
 from pydantic import BaseModel, Field
 
 from cortex.agent.kernel import AgentKernel, AgentState
+from cortex.models.parsing import extract_string_list
 from cortex.models.provider import GenerationConfig, Message
 from cortex.models.router import ModelCapability, ModelRouter
 from cortex.observability.tracing import get_tracer
@@ -172,15 +172,5 @@ class SupervisorAgent:
 
 
 def _parse_json_list(raw: str) -> list[str]:
-    """Parse an LLM JSON array response, falling back to numbered lines."""
-    try:
-        parsed = json.loads(raw)
-        if isinstance(parsed, list):
-            return [str(item).strip() for item in parsed if str(item).strip()]
-    except json.JSONDecodeError:
-        pass
-    return [
-        line.lstrip("0123456789. -").strip()
-        for line in raw.splitlines()
-        if line.strip()
-    ]
+    """Parse an LLM JSON array response (fenced or wrapped), falling back to lines."""
+    return extract_string_list(raw, keys=("subtasks", "tasks", "steps"))

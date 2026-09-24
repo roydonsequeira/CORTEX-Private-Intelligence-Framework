@@ -1,15 +1,15 @@
 """Procedural memory — reusable tool-use patterns backed by ChromaDB."""
 
+import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
-import chromadb
 from pydantic import BaseModel
 
 from cortex.memory.base import BaseMemory, MemoryEntry, MemoryQuery
+from cortex.memory.chroma import get_chroma_client
 from cortex.models.provider import OllamaProvider
 from cortex.observability.tracing import get_tracer
 
@@ -45,16 +45,20 @@ class ProceduralMemory(BaseMemory):
 
     async def initialize(self) -> None:
         """Create or connect to the cortex_procedural Chroma collection."""
+        if self._collection is not None:
+            return
         if self._client is None:
-            self._chroma_path.mkdir(parents=True, exist_ok=True)
-            self._client = chromadb.PersistentClient(path=str(self._chroma_path))
+            self._client = get_chroma_client(self._chroma_path)
         self._collection = self._client.get_or_create_collection(self._collection_name)
 
     async def store_pattern(self, pattern: ToolPattern) -> None:
         """Store a successful or failed tool-use pattern."""
+        # Stable id: repeating the same task with the same tools updates one
+        # pattern instead of accumulating duplicates that crowd out others.
+        key = f"{' '.join(pattern.task_description.casefold().split())}|{pattern.tool_sequence}"
         await self.store(
             MemoryEntry(
-                id=uuid4().hex,
+                id="pattern-" + hashlib.sha1(key.encode("utf-8")).hexdigest(),
                 content=pattern.task_description,
                 metadata={
                     "tool_sequence": pattern.tool_sequence,
@@ -75,9 +79,14 @@ class ProceduralMemory(BaseMemory):
         for entry in entries:
             raw_sequence = entry.metadata.get("tool_sequence", "[]")
             if isinstance(raw_sequence, str):
-                tool_sequence = json.loads(raw_sequence)
+                try:
+                    tool_sequence = json.loads(raw_sequence)
+                except json.JSONDecodeError:
+                    continue
             else:
                 tool_sequence = raw_sequence
+            if not isinstance(tool_sequence, list):
+                continue
             patterns.append(
                 ToolPattern(
                     task_description=entry.content,
@@ -108,13 +117,16 @@ class ProceduralMemory(BaseMemory):
         """Retrieve similar procedural memory entries."""
         await self.initialize()
         assert self._collection is not None
+        available = self._collection.count()
+        if available == 0:
+            return []  # nothing learned yet: skip the embedding round-trip
         with _tracer.start_as_current_span("memory.procedural.retrieve") as span:
             span.set_attribute("memory.collection", self._collection_name)
             span.set_attribute("memory.top_k", query.top_k)
             embedding = (await self._provider.embed(self._embed_model, query.text))[0]
             result = self._collection.query(
                 query_embeddings=[embedding],
-                n_results=query.top_k,
+                n_results=min(query.top_k, available),
             )
         return _entries_from_query_result(result)
 

@@ -15,6 +15,7 @@ Select the backend with ``settings.code_sandbox``. (A capability-free ``wasm``
 backend via Pyodide/wasmtime is a planned third option.)
 """
 
+import ast
 import base64
 import contextlib
 import importlib
@@ -22,7 +23,9 @@ import io
 import json
 import math
 import multiprocessing
+import operator
 import types
+import warnings
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any
@@ -201,14 +204,34 @@ def _sandbox_worker(code: str, queue: Any) -> None:
         queue.put((False, "", f"{type(exc).__name__}: {exc}"))
 
 
+_REPL_VALUE_NAME = "cortex_repl_value"
+_NO_OUTPUT_MESSAGE = (
+    "(code ran successfully but produced no output — use print() to show results)"
+)
+
+
 def _run_code(code: str) -> str:
     """Run RestrictedPython code and return collected output.
 
     A single namespace is used for globals and locals so that a top-level
     function definition is visible when the same snippet calls it (with separate
     dicts, ``def f(): ...`` then ``f()`` raises "name 'f' is not defined").
+
+    Like a REPL, a bare expression on the last line (``fibonacci(20)``) has its
+    value reported — LLM-written snippets routinely forget to ``print`` it.
     """
-    byte_code = compile_restricted(code, "<cortex-python-exec>", "exec")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", SyntaxWarning)
+        try:
+            byte_code = compile_restricted(
+                _capture_last_expression(code), "<cortex-python-exec>", "exec"
+            )
+        except SyntaxError as exc:
+            # RestrictedPython packs its policy violations into a tuple of lines.
+            detail = exc.args[0] if exc.args else exc
+            if isinstance(detail, tuple):
+                detail = "; ".join(str(item) for item in detail)
+            raise SyntaxError(str(detail)) from None
     namespace = _safe_globals()
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):
@@ -216,11 +239,42 @@ def _run_code(code: str) -> str:
     printed = namespace.get("_print")
     collected = printed() if callable(printed) else ""
     direct_stdout = stdout.getvalue()
-    result = namespace.get("_")
     parts = [part for part in (direct_stdout, collected) if part]
-    if result is not None:
-        parts.append(result if isinstance(result, str) else repr(result))
-    return "\n".join(parts).strip()
+    value = namespace.get(_REPL_VALUE_NAME)
+    if value is not None:
+        parts.append(value if isinstance(value, str) else repr(value))
+    output = "\n".join(parts).strip()
+    return output or _NO_OUTPUT_MESSAGE
+
+
+def _capture_last_expression(code: str) -> str | ast.Module:
+    """Rewrite a trailing bare expression into an assignment the runner can read.
+
+    ``print(...)`` calls are left alone (their value is always None). Code that
+    does not parse is returned unchanged so RestrictedPython reports the error.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    if not tree.body or not isinstance(tree.body[-1], ast.Expr):
+        return code
+    last = tree.body[-1]
+    if (
+        isinstance(last.value, ast.Call)
+        and isinstance(last.value.func, ast.Name)
+        and last.value.func.id == "print"
+    ):
+        return code
+    tree.body[-1] = ast.copy_location(
+        ast.Assign(
+            targets=[ast.Name(id=_REPL_VALUE_NAME, ctx=ast.Store())],
+            value=last.value,
+        ),
+        last,
+    )
+    ast.fix_missing_locations(tree)
+    return tree
 
 
 # Pure-computation stdlib modules the sandbox permits `import` for. None of these
@@ -233,6 +287,10 @@ _SAFE_MODULES = frozenset(
         "json", "datetime", "itertools", "functools", "operator", "re",
         "string", "textwrap", "collections", "heapq", "bisect", "calendar",
         "uuid", "hashlib", "base64", "unicodedata", "typing", "enum", "dataclasses",
+        "time",
+        # Imported lazily from C by datetime.strptime/time.strptime; that import
+        # runs through the sandbox's __import__, so it must be allowed explicitly.
+        "_strptime",
     }
 )
 
@@ -277,12 +335,85 @@ def _guarded_getattr(obj: object, name: str, default: Any = None) -> Any:
     return value
 
 
+def _guarded_hasattr(obj: object, name: str) -> bool:
+    """``hasattr`` routed through the same guard as attribute reads."""
+    try:
+        _guarded_getattr(obj, name)
+    except AttributeError:
+        return False
+    return hasattr(obj, name)
+
+
+def _guarded_write(obj: Any) -> Any:
+    """Write guard for ``obj.attr = v`` / ``obj[k] = v``.
+
+    Each snippet runs in its own short-lived process, so mutating ordinary
+    objects (lists, dicts, instances of snippet-defined classes) cannot affect
+    CORTEX. Writes onto modules are still refused, and underscore attributes are
+    already rejected at compile time by RestrictedPython.
+    """
+    if isinstance(obj, types.ModuleType):
+        raise TypeError("modifying modules is not permitted in the sandbox")
+    return obj
+
+
+_INPLACE_OPS: dict[str, Any] = {
+    "+=": operator.iadd,
+    "-=": operator.isub,
+    "*=": operator.imul,
+    "/=": operator.itruediv,
+    "//=": operator.ifloordiv,
+    "%=": operator.imod,
+    "**=": operator.ipow,
+    "@=": operator.imatmul,
+    "<<=": operator.ilshift,
+    ">>=": operator.irshift,
+    "&=": operator.iand,
+    "|=": operator.ior,
+    "^=": operator.ixor,
+}
+
+
+def _inplace_var(op: str, target: Any, value: Any) -> Any:
+    """Implement augmented assignment (``total += i``) for RestrictedPython."""
+    try:
+        return _INPLACE_OPS[op](target, value)
+    except KeyError:
+        raise SyntaxError(f"unsupported augmented assignment operator {op!r}") from None
+
+
 def _safe_globals() -> dict[str, Any]:
     """Return the restricted globals dict used for all code execution."""
     builtins = dict(safe_builtins)
     builtins.update(
         {
             "__import__": _safe_import,
+            "__metaclass__": type,
+            "getattr": _guarded_getattr,
+            "hasattr": _guarded_hasattr,
+            "isinstance": isinstance,
+            "issubclass": issubclass,
+            "type": type,
+            "object": object,
+            "super": super,
+            "property": property,
+            "staticmethod": staticmethod,
+            "classmethod": classmethod,
+            "iter": iter,
+            "next": next,
+            "frozenset": frozenset,
+            "format": format,
+            "bin": bin,
+            "hex": hex,
+            "oct": oct,
+            "ord": ord,
+            "chr": chr,
+            "repr": repr,
+            "hash": hash,
+            "callable": callable,
+            "slice": slice,
+            "complex": complex,
+            "bytes": bytes,
             "len": len,
             "range": range,
             "enumerate": enumerate,
@@ -312,7 +443,11 @@ def _safe_globals() -> dict[str, Any]:
     )
     return {
         "__builtins__": builtins,
+        "__metaclass__": type,
+        "__name__": "cortex_sandbox",
         "_print_": PrintCollector,
+        "_write_": _guarded_write,
+        "_inplacevar_": _inplace_var,
         "_getattr_": _guarded_getattr,
         "_getitem_": default_guarded_getitem,
         "_getiter_": iter,

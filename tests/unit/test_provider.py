@@ -9,11 +9,13 @@ import httpx
 import pytest
 
 from cortex.exceptions import CortexModelError
-from cortex.models.provider import Message, ModelResponse, OllamaProvider
+from cortex.models.provider import Message, ModelResponse, OllamaProvider, ToolCall
 
 
 class _FakeStreamResponse:
     """Minimal stand-in for an httpx streaming Response."""
+
+    is_error = False
 
     def __init__(self, lines: list[str]) -> None:
         self._lines = lines
@@ -225,3 +227,78 @@ async def test_list_models_returns_names(provider: OllamaProvider) -> None:
         names = await provider.list_models()
 
     assert names == ["llama3.1:8b", "nomic-embed-text"]
+
+
+def test_localhost_base_url_uses_ipv4_loopback() -> None:
+    """localhost is rewritten to 127.0.0.1 (Windows' ::1-first lookup costs ~2s/connect)."""
+    assert OllamaProvider("http://localhost:11434")._base_url == "http://127.0.0.1:11434"
+    assert OllamaProvider("http://ollama:11434")._base_url == "http://ollama:11434"
+
+
+@pytest.mark.asyncio
+async def test_payload_pins_context_window_and_keep_alive() -> None:
+    """Every chat call carries num_ctx and keep_alive so Ollama never reloads mid-demo."""
+    provider = OllamaProvider("http://fake-ollama:11434", num_ctx=8192, keep_alive="30m")
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = _make_chat_response("ok")
+    post_mock = AsyncMock(return_value=mock_resp)
+
+    with patch.object(provider._client, "post", new=post_mock):
+        await provider.complete("qwen2.5:7b", [Message(role="user", content="Hi")])
+
+    payload = post_mock.await_args.kwargs["json"]
+    assert payload["options"]["num_ctx"] == 8192
+    assert payload["keep_alive"] == "30m"
+
+
+def test_message_serialises_tool_calls_for_ollama() -> None:
+    """Assistant tool calls and tool replies use Ollama's message shape."""
+    call = Message(
+        role="assistant",
+        content="",
+        tool_calls=[ToolCall(name="python_exec", arguments={"code": "print(1)"})],
+    )
+    reply = Message(role="tool", content="1", tool_name="python_exec")
+
+    assert call.to_ollama() == {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"function": {"name": "python_exec", "arguments": {"code": "print(1)"}}}],
+    }
+    assert reply.to_ollama() == {"role": "tool", "content": "1", "tool_name": "python_exec"}
+
+
+@pytest.mark.asyncio
+async def test_missing_model_error_says_how_to_fix(provider: OllamaProvider) -> None:
+    """A 404 from Ollama becomes an actionable 'ollama pull' message."""
+    request = httpx.Request("POST", "http://fake-ollama:11434/api/chat")
+    response = httpx.Response(404, json={"error": "model not found"}, request=request)
+    error = httpx.HTTPStatusError("404", request=request, response=response)
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.raise_for_status = MagicMock(side_effect=error)
+
+    with patch.object(provider._client, "post", new=AsyncMock(return_value=mock_resp)),             pytest.raises(CortexModelError, match="ollama pull qwen2.5:7b"):
+        await provider.complete("qwen2.5:7b", [Message(role="user", content="Hi")])
+
+
+@pytest.mark.asyncio
+async def test_unreachable_ollama_error_says_how_to_fix(provider: OllamaProvider) -> None:
+    """A connection failure names the URL and how to start Ollama."""
+    with patch.object(
+        provider._client, "post", new=AsyncMock(side_effect=httpx.ConnectError("refused"))
+    ), pytest.raises(CortexModelError, match="ollama serve"):
+        await provider.complete("qwen2.5:7b", [Message(role="user", content="Hi")])
+
+
+@pytest.mark.asyncio
+async def test_stream_error_line_raises(provider: OllamaProvider) -> None:
+    """An {"error": ...} object mid-stream is raised, not silently ignored."""
+    lines = [json.dumps({"error": "out of memory"})]
+    with patch.object(
+        provider._client, "stream", MagicMock(return_value=_FakeStreamContext(lines))
+    ), pytest.raises(CortexModelError, match="out of memory"):
+        async for _ in provider.stream_complete(
+            model="qwen2.5:7b", messages=[Message(role="user", content="Hi")]
+        ):
+            pass

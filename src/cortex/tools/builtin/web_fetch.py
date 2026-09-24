@@ -1,7 +1,9 @@
 """Web fetch tool — offline-tolerant HTML/text retrieval with robots.txt checks."""
 
+import asyncio
+import ssl
 import time
-from typing import Literal
+from typing import Any, Literal
 from urllib import robotparser
 from urllib.parse import urlparse
 
@@ -11,9 +13,33 @@ import httpx
 from cortex.observability.tracing import get_tracer
 from cortex.tools.base import BaseTool, ToolResult, ToolSchema
 
-_MAX_RESPONSE_BYTES = 50 * 1024
-_USER_AGENT = "CORTEX/0.1"
+# Bytes downloaded per page (a Wikipedia article is ~1 MB of HTML, most of it
+# markup), and characters of converted text returned to the model.
+_MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024
+_MAX_OUTPUT_CHARS = 12_000
+# A descriptive agent string with a contact URL; several sites (Wikipedia among
+# them) reject generic or bare agent strings with HTTP 403.
+_USER_AGENT = (
+    "CORTEX/1.0 (local research agent; "
+    "+https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework)"
+)
+_ROBOTS_AGENT = "CORTEX"
 _tracer = get_tracer(__name__)
+
+
+def _ssl_context() -> ssl.SSLContext | bool:
+    """Verify TLS against the operating system trust store when available.
+
+    Corporate proxies and antivirus products that inspect HTTPS install their
+    root certificate in the OS store, not in certifi's bundle, so plain certifi
+    verification fails on those machines. ``truststore`` delegates to the OS.
+    """
+    try:
+        import truststore
+
+        return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except Exception:  # optional dependency or unsupported platform
+        return True
 
 
 class WebFetchTool(BaseTool):
@@ -21,7 +47,10 @@ class WebFetchTool(BaseTool):
 
     schema = ToolSchema(
         name="web_fetch",
-        description="Fetch and parse web pages as readable markdown text.",
+        description=(
+            "Fetch a web page by full URL and return its readable text as markdown. "
+            "Use only when the user gives a URL or asks for live web content."
+        ),
         parameters={
             "type": "object",
             "properties": {
@@ -33,42 +62,66 @@ class WebFetchTool(BaseTool):
         },
     )
 
-    def __init__(self, timeout_seconds: float = 20.0) -> None:
-        self._client = httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True)
+    def __init__(self, timeout_seconds: float = 20.0, client: Any | None = None) -> None:
+        self._client = client or httpx.AsyncClient(
+            timeout=timeout_seconds,
+            follow_redirects=True,
+            verify=_ssl_context(),
+            headers={"User-Agent": _USER_AGENT},
+        )
 
     async def execute(self, **kwargs: object) -> ToolResult:
         """Fetch a URL and return readable content."""
         start = time.monotonic()
-        url = str(kwargs["url"])
+        url = _normalise_url(str(kwargs["url"]))
         output_format: Literal["text", "markdown"] = (
             "markdown" if kwargs.get("format", "markdown") == "markdown" else "text"
         )
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return _result(False, "", start, f"Not a valid web URL: {url}")
         try:
-            parsed = urlparse(url)
             with _tracer.start_as_current_span("http.client.request") as span:
                 span.set_attribute("tool_name", self.schema.name)
                 span.set_attribute("url.full", url)
                 span.set_attribute("server.address", parsed.netloc)
                 span.set_attribute("http.request.method", "GET")
                 if not await self._allowed_by_robots(url):
-                    return _result(False, "", start, "Blocked by robots.txt")
+                    return _result(False, "", start, "Blocked by the site's robots.txt.")
                 response = await self._client.get(url, headers={"User-Agent": _USER_AGENT})
-                response.raise_for_status()
                 span.set_attribute("http.response.status_code", response.status_code)
-            raw = response.content[:_MAX_RESPONSE_BYTES].decode(
-                response.encoding or "utf-8", errors="replace"
-            )
-            output = _to_markdown(raw) if output_format == "markdown" else _strip_html(raw)
-            if len(response.content) > _MAX_RESPONSE_BYTES:
-                output += "\n[response truncated]"
-            return _result(True, output, start)
-        except httpx.HTTPError:
+            if response.status_code >= 400:
+                return _result(
+                    False, "", start, f"HTTP {response.status_code} fetching {url}."
+                )
+            body = response.content[:_MAX_DOWNLOAD_BYTES]
+            raw = body.decode(response.encoding or "utf-8", errors="replace")
+            content_type = response.headers.get("content-type", "")
+            if "html" in content_type or raw.lstrip()[:1] == "<":
+                # HTML conversion of a large page is CPU-bound: keep it off the event loop.
+                convert = _to_markdown if output_format == "markdown" else _strip_html
+                output = await asyncio.to_thread(convert, raw)
+            else:
+                output = raw
+            if len(output) > _MAX_OUTPUT_CHARS:
+                output = output[:_MAX_OUTPUT_CHARS] + "\n[content truncated]"
+            return _result(True, output or "(the page has no readable text)", start)
+        except httpx.TimeoutException:
+            return _result(False, "", start, f"Timed out fetching {url}.")
+        except httpx.ConnectError as exc:
+            message = str(exc)
+            if "CERTIFICATE_VERIFY_FAILED" in message:
+                return _result(
+                    False, "", start, f"TLS certificate verification failed for {parsed.netloc}."
+                )
             return _result(
                 False,
                 "",
                 start,
-                "Network unavailable — CORTEX is running in offline mode",
+                f"Could not connect to {parsed.netloc} — the network may be offline.",
             )
+        except httpx.HTTPError as exc:
+            return _result(False, "", start, f"Request to {parsed.netloc} failed: {exc}")
 
     async def _allowed_by_robots(self, url: str) -> bool:
         """Return whether url is allowed for CORTEX according to robots.txt."""
@@ -82,13 +135,21 @@ class WebFetchTool(BaseTool):
             if response.status_code >= 400:
                 return True
             parser.parse(response.text.splitlines())
-            return parser.can_fetch(_USER_AGENT, url)
+            return parser.can_fetch(_ROBOTS_AGENT, url)
         except httpx.HTTPError:
             return True
 
     async def aclose(self) -> None:
         """Close the underlying HTTP client."""
         await self._client.aclose()
+
+
+def _normalise_url(url: str) -> str:
+    """Trim quotes/whitespace and add https:// to scheme-less URLs ("example.com")."""
+    cleaned = url.strip().strip("\"'<>")
+    if cleaned and "://" not in cleaned:
+        cleaned = "https://" + cleaned.lstrip("/")
+    return cleaned
 
 
 def _to_markdown(html: str) -> str:
@@ -117,6 +178,8 @@ def _strip_unwanted(html: str) -> str:
         r"<script\b[^<]*(?:(?!</script>)<[^<]*)*</script>",
         r"<style\b[^<]*(?:(?!</style>)<[^<]*)*</style>",
         r"<nav\b[^<]*(?:(?!</nav>)<[^<]*)*</nav>",
+        r"<header\b[^<]*(?:(?!</header>)<[^<]*)*</header>",
+        r"<footer\b[^<]*(?:(?!</footer>)<[^<]*)*</footer>",
     ]
     cleaned = html
     for pattern in patterns:

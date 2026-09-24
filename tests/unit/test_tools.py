@@ -158,3 +158,139 @@ def test_tool_registry_auto_discover_skips_bad_plugins(tmp_path: Path) -> None:
     registry = ToolRegistry()
     registry.auto_discover(tmp_path)
     assert registry.list_tools() == []
+
+
+@pytest.mark.asyncio
+async def test_filesystem_reads_utf8_regardless_of_locale(tmp_path: Path) -> None:
+    """Non-ASCII UTF-8 files read correctly (Windows' default codec is cp1252)."""
+    (tmp_path / "notes.md").write_bytes("café — naïve ✓".encode())
+    tool = FileSystemTool(allowed_root=tmp_path)
+    result = await tool.execute(action="read_file", path="notes.md")
+    assert result.success is True
+    assert result.output == "café — naïve ✓"
+
+
+@pytest.mark.asyncio
+async def test_filesystem_normalises_root_paths(tmp_path: Path) -> None:
+    """'/', '.', and a leading slash address the workspace root, not the disk root."""
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    tool = FileSystemTool(allowed_root=tmp_path)
+    for raw in ("/", ".", ""):
+        listing = await tool.execute(action="list_directory", path=raw)
+        assert listing.success is True
+        assert "a.txt" in listing.output
+    read = await tool.execute(action="read_file", path="/a.txt")
+    assert read.output == "x"
+
+
+@pytest.mark.asyncio
+async def test_filesystem_denies_system_paths(tmp_path: Path) -> None:
+    """Absolute system paths are refused with a clear 'outside the workspace' message."""
+    tool = FileSystemTool(allowed_root=tmp_path)
+    for raw in ("/etc/passwd", "C:\\Windows\\win.ini", "//server/share/x.txt"):
+        result = await tool.execute(action="read_file", path=raw)
+        assert result.success is False, raw
+        assert "outside the CORTEX workspace" in (result.error or ""), raw
+
+
+@pytest.mark.asyncio
+async def test_filesystem_never_overwrites_without_explicit_flag(tmp_path: Path) -> None:
+    """Existing files survive a write unless overwrite=true is passed."""
+    (tmp_path / "README.md").write_text("original", encoding="utf-8")
+    tool = FileSystemTool(allowed_root=tmp_path)
+
+    refused = await tool.execute(action="write_file", path="README.md", content="")
+    assert refused.success is False
+    assert "already exists" in (refused.error or "")
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "original"
+
+    replaced = await tool.execute(
+        action="write_file", path="README.md", content="new", overwrite=True
+    )
+    assert replaced.success is True
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "new"
+
+
+@pytest.mark.asyncio
+async def test_filesystem_refuses_writes_to_hidden_paths(tmp_path: Path) -> None:
+    """.git, .venv, .env and other dot-paths are never written."""
+    tool = FileSystemTool(allowed_root=tmp_path)
+    for raw in (".env.txt", ".git/config.txt", "notes/.secret.md"):
+        result = await tool.execute(action="write_file", path=raw, content="x")
+        assert result.success is False, raw
+        assert "hidden" in (result.error or ""), raw
+
+
+@pytest.mark.asyncio
+async def test_filesystem_missing_file_is_a_clean_error(tmp_path: Path) -> None:
+    """A missing file yields a failed result, not an exception."""
+    tool = FileSystemTool(allowed_root=tmp_path)
+    result = await tool.execute(action="read_file", path="nope.txt")
+    assert result.success is False
+    assert "not found" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_reports_http_errors_accurately() -> None:
+    """A 404 is reported as an HTTP error, not as 'offline mode'."""
+    tool = WebFetchTool()
+    request = httpx.Request("GET", "https://example.com/missing")
+    robots = httpx.Response(404, text="", request=request)
+    missing = httpx.Response(404, text="nope", request=request)
+    with patch.object(tool._client, "get", new=AsyncMock(side_effect=[robots, missing])):
+        result = await tool.execute(url="example.com/missing")
+    await tool.aclose()
+    assert result.success is False
+    assert "HTTP 404" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_rejects_non_web_urls() -> None:
+    """Non-http(s) schemes are refused before any request is made."""
+    tool = WebFetchTool()
+    result = await tool.execute(url="file:///etc/passwd")
+    await tool.aclose()
+    assert result.success is False
+
+
+@pytest.mark.asyncio
+async def test_calculator_handles_functions_and_caret() -> None:
+    """The calculator supports sqrt, constants, and ^ as exponent."""
+    from cortex.tools.plugins.calculator import CalculatorTool
+
+    tool = CalculatorTool()
+    assert (await tool.execute(expression="sqrt(144) + 2^3")).output == "20"
+    assert (await tool.execute(expression="(17 * 23) + 5")).output == "396"
+
+
+@pytest.mark.asyncio
+async def test_calculator_refuses_runaway_exponents() -> None:
+    """9**9**9 would freeze the API process; it is refused instead."""
+    from cortex.tools.plugins.calculator import CalculatorTool
+
+    tool = CalculatorTool()
+    for expression in ("9**9**9", "(10**9999)**9999", "factorial(10**9)"):
+        result = await tool.execute(expression=expression)
+        assert result.success is False, expression
+
+
+@pytest.mark.asyncio
+async def test_executor_does_not_retry_deterministic_failures() -> None:
+    """A tool that returns a failure is not re-run (only raised errors are retried)."""
+    from unittest.mock import MagicMock
+
+    from cortex.agent.executor import Executor
+
+    registry = MagicMock(spec=ToolRegistry)
+    registry.execute = AsyncMock(
+        return_value=ToolResult(
+            tool_name="python_exec",
+            success=False,
+            output="",
+            error="SyntaxError",
+            execution_time_ms=0.0,
+        )
+    )
+    result = await Executor()._execute_with_retry("python_exec", registry, code="x=")
+    assert result.success is False
+    assert registry.execute.await_count == 1

@@ -67,7 +67,11 @@ function TurnBlock({ turn, streaming }: { turn: Turn; streaming: boolean }) {
   const activity = turn.events.filter(
     (e) => e.type === "tool_call" || e.type === "tool_result" || e.type === "error"
   );
+  // A token_reset means text streamed so far was preamble before a tool call,
+  // not the answer — keep only the tokens that follow the last reset.
+  const lastReset = turn.events.map((e) => e.type).lastIndexOf("token_reset");
   const answer = turn.events
+    .slice(lastReset + 1)
     .filter((e): e is Extract<TimedEvent, { type: "token" }> => e.type === "token")
     .map((e) => e.value)
     .join("");
