@@ -1,4 +1,4 @@
-# CORTEX — Private Intelligence Framework
+# CORTEX — Private Intelligence Framework 
 
 > "Intelligence that stays yours."
 
@@ -124,7 +124,6 @@ All runtime configuration lives in `cortex.yaml` and can be overridden with `COR
 | `task_db_path` | `./.cortex/tasks.db` | SQLite path for the durable task store |
 | `telemetry_enabled` | `true` | Export OpenTelemetry traces/metrics; set `false` to run without a collector (no Jaeger) and no export warnings |
 | `otel_endpoint` | `http://localhost:4317` | OTLP gRPC endpoint |
-| `max_agent_steps` | `20` | ReAct loop budget |
 | `code_sandbox` | `restricted` | Code execution backend: `restricted` (in-process) or `container` (Docker isolation) |
 | `stream_tokens` | `true` | Stream final-answer tokens from Ollama as they generate |
 | `procedural_memory_enabled` | `true` | Learn tool-use patterns and feed them to the planner |
