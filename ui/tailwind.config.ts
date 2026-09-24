@@ -5,19 +5,28 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        background: "var(--background)",
-        surface: "var(--surface)",
-        border: "var(--border)",
-        accent: "var(--accent)",
-        primary: "var(--text-primary)",
-        muted: "var(--text-muted)"
+        ground: "var(--ground)",
+        panel: "var(--panel)",
+        raised: "var(--raised)",
+        line: "var(--line)",
+        ink: "var(--ink)",
+        "ink-dim": "var(--ink-dim)",
+        "ink-faint": "var(--ink-faint)",
+        signal: "var(--signal)",
+        ok: "var(--ok)",
+        bad: "var(--bad)",
+        think: "var(--think)",
+        tool: "var(--tool)"
       },
       fontFamily: {
-        mono: ["var(--font-jetbrains)", "monospace"],
-        sans: ["var(--font-inter)", "sans-serif"]
+        mono: ["var(--font-mono)"],
+        sans: ["var(--font-sans)"]
+      },
+      borderRadius: {
+        card: "10px"
       },
       transitionTimingFunction: {
-        cortex: "ease-out"
+        out: "cubic-bezier(0.16, 1, 0.3, 1)"
       }
     }
   },

@@ -3,10 +3,10 @@
 import { useCallback, useRef, useState } from "react";
 
 import { API_URL } from "./api";
-import type { AgentEvent, ModelCapability } from "./types";
+import type { AgentEvent, ModelCapability, TimedEvent } from "./types";
 
 interface StreamState {
-  events: AgentEvent[];
+  events: TimedEvent[];
   isStreaming: boolean;
   error: string | null;
   sessionId: string | null;
@@ -15,11 +15,15 @@ interface StreamState {
 }
 
 export function useAgentStream(initialSessionId: string | null = null): StreamState {
-  const [events, setEvents] = useState<AgentEvent[]>([]);
+  const [events, setEvents] = useState<TimedEvent[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(initialSessionId);
   const abortRef = useRef<AbortController | null>(null);
+
+  const append = useCallback((event: AgentEvent) => {
+    setEvents((prev) => [...prev, { ...event, at: performance.now() }]);
+  }, []);
 
   const reset = useCallback(() => {
     abortRef.current?.abort();
@@ -35,6 +39,7 @@ export function useAgentStream(initialSessionId: string | null = null): StreamSt
       abortRef.current = controller;
       setIsStreaming(true);
       setError(null);
+      append({ type: "user", value: message });
 
       try {
         const response = await fetch(`${API_URL}/chat/stream`, {
@@ -51,7 +56,7 @@ export function useAgentStream(initialSessionId: string | null = null): StreamSt
           throw new Error(`Stream failed: ${response.status}`);
         }
         await parseSse(response.body, (event) => {
-          setEvents((prev) => [...prev, event]);
+          append(event);
           if (event.type === "session_id") {
             setSessionId(event.value);
           }
@@ -61,13 +66,15 @@ export function useAgentStream(initialSessionId: string | null = null): StreamSt
         });
       } catch (exc) {
         if ((exc as Error).name !== "AbortError") {
-          setError((exc as Error).message);
+          const message = (exc as Error).message;
+          setError(message);
+          append({ type: "error", message });
         }
       } finally {
         setIsStreaming(false);
       }
     },
-    [sessionId]
+    [append, sessionId]
   );
 
   return { events, isStreaming, error, sessionId, sendMessage, reset };
