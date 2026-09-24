@@ -113,3 +113,10 @@ def test_plan_step_loses_literal_newline_escapes() -> None:
 
 def test_plan_of_only_code_falls_back_to_direct_answer() -> None:
     assert _tidy_steps(["```python\nprint(1)\n```"]) == ["Answer directly from knowledge"]
+
+
+def test_plan_steps_without_words_are_dropped() -> None:
+    """A planner that answers ("2") instead of planning falls back to a direct answer."""
+    assert _tidy_steps(["2"]) == ["Answer directly from knowledge"]
+    assert _tidy_steps(["[2, 3, 5]", "Run it with python_exec"]) == ["Run it with python_exec"]
+    assert _tidy_steps(["नमस्ते का जवाब दें"]) == ["नमस्ते का जवाब दें"]
