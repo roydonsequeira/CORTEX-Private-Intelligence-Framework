@@ -66,8 +66,6 @@ services:
         NEXT_PUBLIC_CORTEX_API_URL: http://localhost:8000
     ports:
       - "127.0.0.1:3000:3000"
-    environment:
-      - CORTEX_API_URL=http://cortex-api:8000
     depends_on:
       - cortex-api
     networks:
