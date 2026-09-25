@@ -44,7 +44,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="CORTEX",
         description="Private Intelligence Framework — fully local AI agent.",
-        version="1.0.0",
+        version="1.1.0",
         lifespan=_lifespan,
     )
     settings = get_settings()
