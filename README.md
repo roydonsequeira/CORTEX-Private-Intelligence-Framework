@@ -1,7 +1,11 @@
-# CORTEX — Private Intelligence Framework 
+# CORTEX — Private Intelligence Framework
 
 > "Intelligence that stays yours."
 
+**A private AI agent that runs entirely on your own machine** — it plans, uses sandboxed tools, remembers you across sessions, and streams every step live, on a laptop GPU with 6 GB of VRAM. No cloud, no API keys, nothing leaves your computer.
+
+[![CI](https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/actions/workflows/ci.yml/badge.svg)](https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/actions/workflows/ci.yml)
+![Tests](https://img.shields.io/badge/tests-204%20unit%20%2B%20187%20live-brightgreen)
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Docker](https://img.shields.io/badge/Docker-Compose-blue)
@@ -13,6 +17,19 @@
 Cloud AI is powerful, but everything you send to it can be logged, retained, inspected, or used to train future models. Prompts, files, private notes, source code, and research questions leave your machine and enter systems you do not control.
 
 CORTEX is a fully local, privacy-first AI agent framework that runs on your own hardware. It combines Ollama models, a production FastAPI runtime, a Next.js operator UI, four-tier memory, sandboxed tools, LATS reasoning, supervisor-worker orchestration, and OpenTelemetry observability without requiring cloud API keys.
+
+## Built for small models: rules enforced in code, not prompts
+
+Small local models break rules that prompts ask them to follow. Driving CORTEX with 187 real conversations against `qwen2.5:7b` showed exactly how: it claimed "I saved the file" without saving it, pasted a program again instead of saying it can't run, invented a number when its code printed nothing, stored "your name is Ada" from a JSON example, and followed an instruction hidden inside text it was asked to summarise. So the guardrails live in the agent code, where the model can't talk its way around them:
+
+- **No tools for answers that don't need them** — a direct-answer or refusal plan runs with no tool schemas at all; destructive plans become a refusal before anything runs.
+- **Quoted or pasted text is data** — it never counts as the user asking for a file write, a tool or a run, so injected instructions can't trigger actions.
+- **Skipped or faked tool use is recovered** — if the plan and the user both call for a tool and the model answers without it, CORTEX runs the code the model wrote or asks for the tool, once.
+- **"Run it" on a game or GUI program** gets an instant, honest answer (no window or keyboard in the sandbox, plus the local run command) instead of a repasted program.
+- **Web fetch reaches public sites only** — loopback, private-network and cloud-metadata addresses are refused after DNS resolution and on every redirect.
+- **Memory learns only what you say about yourself**, and only durable facts.
+
+The [live test battery](evals/live_battery/) is in the repo: 39/39 on the test plan, 134/137 extra prompts (the rest fixed and re-run clean), 11/11 ops and security checks. It found 27 issues the unit tests had missed.
 
 ## Architecture
 
@@ -192,7 +209,8 @@ CORTEX is designed to run on hardware you control, and its guardrails are built 
   - `container` — each snippet runs in an ephemeral Docker container with the network disabled, a read-only root filesystem, all Linux capabilities dropped, `no-new-privileges`, a tmpfs workdir, and CPU/memory/pid limits, so the OS process boundary is the real isolation layer. Use this for untrusted or multi-tenant workloads (`pip install 'cortex-agent[container]'`).
 - **Filesystem** access is confined to a configurable workspace root, rejects `..` traversal and absolute or system paths with a clear "access denied", enforces read/write size caps, and restricts writable extensions. Writes never overwrite an existing file unless `overwrite: true` is passed, and never touch hidden paths (`.git`, `.venv`, `.env`, `.cortex`). There is no delete capability.
 - **Prompt injection** is handled with least privilege rather than prompt wording alone: destructive requests are refused, and when the plan is a direct answer or a refusal the model is given no tools at all; at most three tool calls run per step; content from files, documents and web pages is treated as untrusted data; and every tool call is schema-validated, time-limited and traced.
-- **Web fetch** honours `robots.txt`, verifies TLS against the operating system trust store, caps download and output size, and reports specific errors (HTTP status, timeout, offline).
+- **Web fetch** reaches public hosts only: loopback, private-network, link-local (cloud metadata) and reserved addresses are refused after DNS resolution and again on every redirect hop, so a prompt or an injected page cannot use it to probe your machine or network. It honours `robots.txt`, verifies TLS against the operating system trust store, caps download and output size, and reports specific errors (HTTP status, timeout, offline).
+- **Quoted and pasted text is data:** text you hand CORTEX to summarise, translate or analyse never counts as you asking for a file write, a tool or a run, and a file is overwritten only when you explicitly ask.
 - **Calculator** evaluates an expression tree without `eval` and bounds exponents and factorials, so an expression like `9**9**9` cannot stall the API.
 - **API** requests are validated with Pydantic, rate limited per IP with a token bucket, and refused while the server drains for graceful shutdown. Authentication is off by default for localhost; set `api_key` (e.g. via `CORTEX_API_KEY`) to require a bearer token on every route except `/health` and the docs, and narrow `cors_origins` before exposing the API beyond your machine.
 
@@ -218,7 +236,9 @@ flowchart TD
 | Semantic | ChromaDB, `.cortex/chroma` (collection `cortex_semantic`) | durable facts about the user and indexed document chunks, as embeddings |
 | Procedural | ChromaDB, `.cortex/chroma` (collection `cortex_procedural`) | tool sequences that solved past tasks, used as planner hints |
 
-Each request replays the session's recent exchanges from SQLite and retrieves relevant long-term facts from ChromaDB. After the answer, a background step extracts durable facts about the user; facts are keyed by their content, so re-learning one updates it rather than duplicating it. Everything stays on disk under `.cortex/`: inspect it with `GET /memory/sessions` and `GET /memory/search`, and clear it with `cortex reset-memory --yes`.
+Each request replays the session's recent exchanges from SQLite and retrieves relevant long-term facts from ChromaDB. After the answer, a background step extracts durable facts about the user — only from turns where you say something about yourself ("my name is…", "I prefer…"), so names inside data you paste are never learned as yours. Facts are keyed by their content, so re-learning one updates it rather than duplicating it.
+
+Everything stays on disk under `.cortex/`. Inspect it with `GET /memory/sessions` and `GET /memory/search` (add `types=procedural` to see learned tool patterns), watch the server log for `procedural_pattern_saved`, `procedural_hints_used` and `working_memory_cleared`, and clear it all with `cortex reset-memory --yes`.
 
 ## Observability
 
@@ -252,15 +272,22 @@ See [DEMO.md](DEMO.md) for reproducible examples.
 ## Testing
 
 ```bash
-pytest                 # 132 unit and integration tests (the model is mocked)
+pytest                 # 204 unit and integration tests (the model is mocked)
 pytest -m ollama       # live tests against a running Ollama
-ruff check src tests && mypy src   # lint and strict type checking
+ruff check src tests && mypy src tests   # lint and strict type checking
 ```
 
 CI runs lint, tests, the UI build and the Docker build on every pull request. Each reliability bug found by running CORTEX against a live model has a regression test.
 
+The [live test battery](evals/live_battery/) drives a running CORTEX like the UI does — 187 cases from basic questions to prompt-injection attacks — against an isolated database and workspace. It is how the bugs that only a real model produces were found.
+
 ## Roadmap
 
+- [ ] Hybrid retrieval (BM25 + vector) with a reranker and mandatory citations
+- [ ] Human handoff when the agent stalls or is not confident
+- [ ] Merge near-duplicate memory facts before storing them
+- [ ] Read-only workspace file access from the Python sandbox
+- [ ] Azure OpenAI / OpenAI-compatible model adapter
 - [ ] Voice I/O (Whisper + TTS, fully local)
 - [ ] Vision tool (LLaVA integration)
 - [ ] Multi-modal document processing
