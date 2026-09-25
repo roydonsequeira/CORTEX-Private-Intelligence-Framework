@@ -14,16 +14,6 @@ Cloud AI is powerful, but everything you send to it can be logged, retained, ins
 
 CORTEX is a fully local, privacy-first AI agent framework that runs on your own hardware. It combines Ollama models, a production FastAPI runtime, a Next.js operator UI, four-tier memory, sandboxed tools, LATS reasoning, supervisor-worker orchestration, and OpenTelemetry observability without requiring cloud API keys.
 
-## Demo
-
-<!--
-  Record a ~3-minute local walkthrough (see docs/DEMO_RECORDING.md), save it as
-  docs/assets/demo.gif, then uncomment the line below to embed it here:
--->
-<!-- ![CORTEX live demo](docs/assets/demo.gif) -->
-
-A 3-minute local walkthrough — live token streaming, a sandboxed `python_exec` tool call, cross-session memory, and the request trace in Jaeger. Recording steps: [docs/DEMO_RECORDING.md](docs/DEMO_RECORDING.md).
-
 ## Architecture
 
 ```mermaid
