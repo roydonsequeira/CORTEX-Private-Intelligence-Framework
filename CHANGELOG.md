@@ -6,6 +6,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `doc_search` no longer rejects a whole call over an out-of-range number: the
+  schema's hard `minimum`/`maximum` on `top_k`, `chunk_size` and `overlap` are
+  gone and the tool clamps them instead (overlap capped at half a chunk). Seen
+  live when `qwen2.5:7b` sent `chunk_size: 100` and had to fall back to reading
+  the file. An empty search now suggests passing `path` to index and search in
+  one call.
+
 ### Documentation
 
 - A live demo GIF at the top of the README (`docs/assets/demo.gif`).
