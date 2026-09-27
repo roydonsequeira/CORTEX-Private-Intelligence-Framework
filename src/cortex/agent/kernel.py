@@ -72,7 +72,10 @@ class AgentKernel:
         self._memory_manager = memory_manager
         self._settings = settings
         self._planner = Planner(router)
-        self._executor = Executor(stream=settings.stream_tokens)
+        self._executor = Executor(
+            stream=settings.stream_tokens,
+            python_reads_workspace=settings.code_sandbox == "restricted",
+        )
 
     async def run(
         self,

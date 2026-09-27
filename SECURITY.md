@@ -44,7 +44,8 @@ does and does not guarantee.
 In scope:
 
 - sandbox escapes from `python_exec` (see the RestrictedPython notes in the README),
-- filesystem-guard bypasses (workspace-root escape, extension bypass),
+- filesystem-guard bypasses (workspace-root escape through the filesystem tool
+  or `python_exec`'s read-only `open()`, writes through `open()`, extension bypass),
 - authentication/authorization bypasses when `api_key` is configured,
 - request handling that lets one client affect another,
 - ways for a web page or another origin to reach a default (loopback) instance.

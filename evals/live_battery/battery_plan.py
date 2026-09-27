@@ -4,9 +4,29 @@ Order matters: 25 (cross-session recall) needs 24 first, and 35 (no silent
 overwrite) needs the notes.txt written by 14.
 """
 
+import re
 import sys
 
-from harness import run_suite
+from harness import WORKSPACE, run_suite
+
+
+def _memory_counts() -> list[str]:
+    """Right answers for case 37, however a program counts "memory" in README.md.
+
+    The count changes whenever the README does, so it is read from the eval
+    workspace. Before this check the case passed on a made-up number.
+    """
+    try:
+        text = (WORKSPACE / "README.md").read_text(encoding="utf-8")
+    except OSError:
+        return ["(README.md is missing from the eval workspace)"]
+    counts = {
+        text.count("memory"),
+        text.lower().count("memory"),
+        len(re.findall(r"\bmemory\b", text)),
+        len(re.findall(r"\bmemory\b", text, re.IGNORECASE)),
+    }
+    return sorted(str(n) for n in counts)
 
 LEAK = ["how to work:", "call at most one tool per step", "precise task planner"]
 
@@ -426,6 +446,7 @@ CASES = [
             {
                 "p": 'Read README.md, then use Python to count how many times the word "memory" appears',
                 "tools": ["filesystem"],
+                "nums": _memory_counts(),
                 "maxs": 90,
             }
         ],

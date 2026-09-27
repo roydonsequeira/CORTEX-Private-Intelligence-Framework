@@ -472,3 +472,18 @@ async def test_python_exec_repairs_escaped_quotes() -> None:
     result = await CodeExecutionTool().execute(code=code)
     assert result.success is True
     assert result.output == "nodyoR"
+
+
+def test_executor_prompt_describes_python_file_access_per_backend() -> None:
+    """The model is told open() reads workspace files only when the sandbox allows it."""
+    from cortex.agent.executor import Executor
+    from cortex.agent.kernel import AgentState
+
+    state = AgentState(session_id="s", user_input="count words in README.md")
+    reads = Executor(python_reads_workspace=True).build_context(state)[0].content
+    no_files = Executor(python_reads_workspace=False).build_context(state)[0].content
+
+    assert "open('name.txt')" in reads
+    assert "Code cannot open files" in no_files
+    assert "{python_files}" not in reads + no_files
+    assert "never state the result a failed tool call was meant to compute" in reads
