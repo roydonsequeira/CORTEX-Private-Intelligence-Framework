@@ -71,7 +71,7 @@ flowchart TB
 - **Plugin-first tools:** drop a `BaseTool` subclass into `src/cortex/tools/plugins/` and restart.
 - **Streaming API:** Server-Sent Events for plans, steps, tool calls, tokens, and completion events.
 - **Operator UI:** terminal-inspired Next.js interface with memory search and execution trace panel.
-- **OpenTelemetry by default:** FastAPI, model calls, tools, memory, and agent spans exported to Jaeger.
+- **OpenTelemetry tracing (opt-in):** FastAPI, model calls, tools, memory, and agent spans exported to Jaeger — on in the Docker stack, off in the shipped `cortex.yaml` for native runs.
 - **Release hardening:** request IDs, token bucket rate limiting, graceful shutdown, strict typing, CI.
 
 ## Quick Start
