@@ -96,9 +96,9 @@ CASES = [
         maxs=30,
     ),
     one(
-        "A15 textron",
-        "What is Textron known for?",
-        any=["bell", "cessna", "aircraft", "aviation", "helicopter", "beechcraft"],
+        "A15 boeing",
+        "What is Boeing known for?",
+        any=["aircraft", "airplane", "aerospace", "aviation", "jet", "737", "747"],
         notools=True,
         maxs=30,
     ),
@@ -852,7 +852,7 @@ CASES = [
         maxs=45,
     ),
     one(
-        "J08 textron design",
+        "J08 manuals chatbot design",
         "How would you design a chatbot that answers questions from aircraft maintenance manuals?",
         any=["retriev", "rag", "search", "index"],
         notools=True,
