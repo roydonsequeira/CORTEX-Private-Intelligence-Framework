@@ -25,6 +25,9 @@ def _memory_counts() -> list[str]:
         text.lower().count("memory"),
         len(re.findall(r"\bmemory\b", text)),
         len(re.findall(r"\bmemory\b", text, re.IGNORECASE)),
+        # Whole whitespace-separated words ("memory," is not "memory").
+        text.split().count("memory"),
+        text.lower().split().count("memory"),
     }
     return sorted(str(n) for n in counts)
 
