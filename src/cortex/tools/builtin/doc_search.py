@@ -26,9 +26,17 @@ class DocumentSearchTool(BaseTool):
                 "action": {"type": "string", "enum": ["search", "index_document"]},
                 "query": {"type": "string"},
                 "path": {"type": "string"},
-                "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
-                "chunk_size": {"type": "integer", "minimum": 128, "maximum": 4096},
-                "overlap": {"type": "integer", "minimum": 0, "maximum": 1024},
+                # Ranges are clamped in code, not enforced here: a schema minimum
+                # rejects the whole call when a small model sends chunk_size=100.
+                "top_k": {"type": "integer", "description": "Results to return, 1-20 (default 5)."},
+                "chunk_size": {
+                    "type": "integer",
+                    "description": "Characters per chunk when indexing, 128-4096 (default 512).",
+                },
+                "overlap": {
+                    "type": "integer",
+                    "description": "Characters shared by neighbouring chunks, 0-1024 (default 64).",
+                },
             },
             "additionalProperties": False,
         },
@@ -59,35 +67,27 @@ class DocumentSearchTool(BaseTool):
                     # "Search README.md for X": models often skip the index step, so
                     # index that document first (re-indexing replaces its chunks,
                     # so this is idempotent) and search only within it.
-                    await self.index_document(
-                        str(kwargs["path"]),
-                        _int_arg(kwargs.get("chunk_size"), 512),
-                        _int_arg(kwargs.get("overlap"), 64),
-                    )
+                    await self.index_document(str(kwargs["path"]), *_chunk_args(kwargs))
                     source = str(self._resolve(str(kwargs["path"])))
-                results = await self.search(query, _int_arg(kwargs.get("top_k"), 5), source)
+                results = await self.search(query, _int_arg(kwargs.get("top_k"), 5, 1, 20), source)
                 if not results:
                     return _result(
                         True,
-                        "No indexed documents matched this query (index a document with "
-                        "action='index_document' first).",
+                        "No indexed documents matched this query. Pass 'path' (for example "
+                        "README.md) to index and search that document in one call.",
                         start,
                     )
                 output = json.dumps(results, ensure_ascii=False)
             elif action == "index_document":
                 if not kwargs.get("path"):
                     return _result(False, "", start, "The 'index_document' action requires a 'path'.")
-                chunks = await self.index_document(
-                    str(kwargs["path"]),
-                    _int_arg(kwargs.get("chunk_size"), 512),
-                    _int_arg(kwargs.get("overlap"), 64),
-                )
+                chunks = await self.index_document(str(kwargs["path"]), *_chunk_args(kwargs))
                 output = f"Indexed {chunks} chunks."
                 query = str(kwargs.get("query", "")).strip()
                 if query:
                     # Index and search in one call: saves the model a second step.
                     source = str(self._resolve(str(kwargs["path"])))
-                    matches = await self.search(query, _int_arg(kwargs.get("top_k"), 5), source)
+                    matches = await self.search(query, _int_arg(kwargs.get("top_k"), 5, 1, 20), source)
                     output += " Top matches: " + json.dumps(matches, ensure_ascii=False)
             else:
                 return _result(False, "", start, f"Unsupported action: {action}")
@@ -205,15 +205,24 @@ def _sliding_chunks(text: str, chunk_size: int, overlap: int) -> list[str]:
     return [chunk for chunk in chunks if chunk]
 
 
-def _int_arg(value: object, default: int) -> int:
-    """Parse an integer tool argument with a default."""
+def _chunk_args(kwargs: dict[str, object]) -> tuple[int, int]:
+    """Chunk size and overlap for indexing, clamped to sane values.
+
+    The overlap is capped at half the chunk size: an overlap close to the chunk
+    size would advance the sliding window a character at a time.
+    """
+    chunk_size = _int_arg(kwargs.get("chunk_size"), 512, 128, 4096)
+    overlap = _int_arg(kwargs.get("overlap"), 64, 0, 1024)
+    return chunk_size, min(overlap, chunk_size // 2)
+
+
+def _int_arg(value: object, default: int, low: int, high: int) -> int:
+    """Parse an integer tool argument with a default, clamped to [low, high]."""
     if value is None:
         return default
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        return int(value)
-    raise TypeError(f"Expected integer-compatible value, got {type(value).__name__}.")
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        raise TypeError(f"Expected integer-compatible value, got {type(value).__name__}.")
+    return max(low, min(high, int(value)))
 
 
 def _result(
