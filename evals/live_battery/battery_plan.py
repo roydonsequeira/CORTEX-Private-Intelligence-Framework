@@ -254,10 +254,10 @@ CASES = [
     {
         "id": "24 remember",
         "turns": [
-            {"p": "My name is Roydon and I'm interviewing at Textron", "notools": True, "maxs": 30},
+            {"p": "My name is Roydon and I'm learning Rust", "notools": True, "maxs": 30},
             {
-                "p": "What's my name and where am I interviewing?",
-                "req": ["roydon", "textron"],
+                "p": "What's my name and what am I learning?",
+                "req": ["roydon", "rust"],
                 "notools": True,
                 "maxs": 30,
             },
@@ -269,7 +269,7 @@ CASES = [
             {
                 "p": "What do you know about me?",
                 "req": ["roydon"],
-                "any": ["textron"],
+                "any": ["rust"],
                 "new_session": True,
                 "sleep": 8,
                 "maxs": 30,

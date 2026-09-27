@@ -1,7 +1,8 @@
 # Recording the CORTEX demo GIF
 
 A short screen recording is the most reliable way to show CORTEX off — it always
-works, needs no hosting, and drops straight into the README. Aim for **2–3 minutes**.
+works, needs no hosting, and drops straight into the README. Aim for **under a minute**
+for the README GIF; a longer walkthrough works better as a linked MP4.
 
 ## 1. Bring up a fast local stack
 
@@ -43,14 +44,19 @@ Keep prompts short. Have this recording as a fallback even if you also demo live
   `ffmpeg -i demo.mov -vf "fps=12,scale=1280:-1:flags=lanczos" demo.gif`
 - **Linux:** [Peek](https://github.com/phw/peek), or `ffmpeg` as above.
 
-Keep the GIF under ~10 MB (12–15 fps, ~1280px wide, trim dead air). For a longer or
-higher-quality version, keep an MP4 alongside and link it.
+Keep the GIF under ~10 MB and trim dead air. For a longer or higher-quality version,
+keep an MP4 alongside and link it. Lessons from the current recording:
+
+- **Record in a private window.** Browser extensions draw over the page — Grammarly
+  pops an icon over the chat every time you paste a prompt.
+- **Crop to the chat column (~660 px wide).** GitHub shows README images at most
+  ~880 px wide, so a full-screen capture is shrunk until its text is unreadable.
+- **Use frame delays of 20 ms or more.** Browsers slow any GIF frame of 10 ms or less
+  down to 100 ms, so a GIF "sped up" with 10 ms frames plays several times slower
+  on GitHub than in the editor. Speed up waiting by dropping frames instead.
+- **Hold each finished answer for 2–3 seconds** so it can be read.
 
 ## 4. Wire it into the README
 
-Save the file as `docs/assets/demo.gif`, then uncomment the embed line in the
-**Demo** section of `README.md`:
-
-```markdown
-![CORTEX live demo](docs/assets/demo.gif)
-```
+The README embeds `docs/assets/demo.gif` right under the badges. Replace that file
+to update the demo; keep it under ~10 MB so it renders inline.

@@ -285,7 +285,7 @@ def test_only_self_statements_are_consolidated() -> None:
     """A name inside data ("give me the name: Ada") is not a fact about the user."""
     from cortex.memory.semantic import _SELF_STATEMENT
 
-    assert _SELF_STATEMENT.search("My name is Roydon and I'm interviewing at Textron")
+    assert _SELF_STATEMENT.search("My name is Roydon and I'm learning Rust")
     assert _SELF_STATEMENT.search("Call me Captain from now on")
     assert _SELF_STATEMENT.search("I prefer answers in bullet points")
     assert not _SELF_STATEMENT.search(
