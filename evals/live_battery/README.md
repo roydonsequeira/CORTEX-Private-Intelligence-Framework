@@ -45,9 +45,9 @@ against the current case definitions without calling the model.
 
 ## Reading the results
 
-Checks are heuristics over free text (expected substrings, tools used, no code
-repasted, a file *not* written, a time limit). **Before fixing a failure, read
-the recorded answer**: a correct answer can be phrased in a way a check misses
+Checks are heuristics over free text (expected substrings or an exact number,
+tools used, no code repasted, a file *not* written, a time limit). **Before
+fixing a failure, read the recorded answer**: a correct answer can be phrased in a way a check misses
 (`\frac{1}{2}` for 1/2, "could not be found" for "not found"). A 7B model also
 varies run to run, so re-run a failing case before concluding.
 

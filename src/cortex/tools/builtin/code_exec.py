@@ -8,6 +8,17 @@ from cortex.tools.base import BaseTool, ToolResult, ToolSchema
 from cortex.tools.sandbox import CodeSandbox, RestrictedSandbox, create_sandbox
 
 _MAX_OUTPUT_CHARS = 8192
+_PARAMETERS = {
+    "type": "object",
+    "properties": {"code": {"type": "string"}},
+    "required": ["code"],
+    "additionalProperties": False,
+}
+_READS_WORKSPACE_DESCRIPTION = (
+    "Execute Python code in a sandboxed environment. Code can read workspace files with "
+    "open() but not write them; no network, no subprocess. Use for computation, data "
+    "transformation, and analysis."
+)
 
 
 class CodeExecutionTool(BaseTool):
@@ -28,12 +39,7 @@ class CodeExecutionTool(BaseTool):
             "Execute Python code in a sandboxed environment. No file access, no network, "
             "no subprocess. Use for computation, data transformation, and analysis."
         ),
-        parameters={
-            "type": "object",
-            "properties": {"code": {"type": "string"}},
-            "required": ["code"],
-            "additionalProperties": False,
-        },
+        parameters=_PARAMETERS,
     )
 
     def __init__(
@@ -45,7 +51,9 @@ class CodeExecutionTool(BaseTool):
     @classmethod
     def from_settings(cls, settings: Settings) -> "CodeExecutionTool":
         """Create a CodeExecutionTool with the sandbox backend from CORTEX settings."""
-        return cls(settings.code_exec_timeout_seconds, sandbox=create_sandbox(settings))
+        sandbox = create_sandbox(settings)
+        tool = WorkspaceCodeExecutionTool if sandbox.reads_workspace else cls
+        return tool(settings.code_exec_timeout_seconds, sandbox=sandbox)
 
     async def execute(self, **kwargs: object) -> ToolResult:
         """Run the submitted code in the configured sandbox backend."""
@@ -60,6 +68,18 @@ class CodeExecutionTool(BaseTool):
                 execution_time_ms=(time.monotonic() - start) * 1000,
             )
         return _error(result.error or "Code execution failed.", start)
+
+
+class WorkspaceCodeExecutionTool(CodeExecutionTool):
+    """python_exec on a sandbox whose open() reads workspace files.
+
+    The description says so: told "no file access", a model that needs a file's
+    contents guesses the answer instead of reading the file.
+    """
+
+    schema = ToolSchema(
+        name="python_exec", description=_READS_WORKSPACE_DESCRIPTION, parameters=_PARAMETERS
+    )
 
 
 def _repair_escaped_newlines(code: str) -> str:

@@ -5,7 +5,7 @@
 **A private AI agent that runs entirely on your own machine** — it plans, uses sandboxed tools, remembers you across sessions, and streams every step live, on a laptop GPU with 6 GB of VRAM. No cloud, no API keys, nothing leaves your computer.
 
 [![CI](https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/actions/workflows/ci.yml/badge.svg)](https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/actions/workflows/ci.yml)
-![Tests](https://img.shields.io/badge/tests-206%20unit%20%2B%20187%20live-brightgreen)
+![Tests](https://img.shields.io/badge/tests-223%20unit%20%2B%20187%20live-brightgreen)
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Docker](https://img.shields.io/badge/Docker-Compose-blue)
@@ -209,7 +209,7 @@ CORTEX is designed to run on hardware you control, and its guardrails are built 
 - **Network exposure** is closed by default: the API binds to `127.0.0.1`, accepts browser calls only from local origins (CORS; loopback on any port), and only under local host names (a `Host` check that blocks DNS-rebinding attacks from web pages). The Docker stack publishes every port on `127.0.0.1`. To expose CORTEX, set `api_key` and widen `api_host`, `allowed_hosts` and `cors_origins` deliberately; `cortex serve` warns if you bind beyond loopback without a key. Direct tool execution (`POST /tools/{name}/execute`) is disabled unless `debug_tool_endpoint` is set.
 
 - **Code execution** uses a pluggable sandbox backend selected by `code_sandbox`:
-  - `restricted` (default) — compiled with RestrictedPython and run in a separate spawned process with a hard timeout. The attribute guard blocks dunder access and any traversal that would return a module object, closing escapes such as `json → codecs → sys → sys.modules['os']`. This is a best-effort in-process sandbox, **not** a guarantee against a determined adversary.
+  - `restricted` (default) — compiled with RestrictedPython and run in a separate spawned process with a hard timeout. The attribute guard blocks dunder access and any traversal that would return a module object, closing escapes such as `json → codecs → sys → sys.modules['os']`. Its `open()` is read-only and confined to the workspace: it follows the filesystem tool's path rules (no `..`, no absolute paths, symlinks resolved, 1 MB, text only), never opens hidden paths such as `.env`, `.git` or `.cortex`, and hands the snippet an in-memory copy rather than a file handle. This is a best-effort in-process sandbox, **not** a guarantee against a determined adversary.
   - `container` — each snippet runs in an ephemeral Docker container with the network disabled, a read-only root filesystem, all Linux capabilities dropped, `no-new-privileges`, a tmpfs workdir, and CPU/memory/pid limits, so the OS process boundary is the real isolation layer. Use this for untrusted or multi-tenant workloads (`pip install 'cortex-agent[container]'`).
 - **Filesystem** access is confined to a configurable workspace root, rejects `..` traversal and absolute or system paths with a clear "access denied", enforces read/write size caps, and restricts writable extensions. Writes never overwrite an existing file unless `overwrite: true` is passed, and never touch hidden paths (`.git`, `.venv`, `.env`, `.cortex`). There is no delete capability.
 - **Prompt injection** is handled with least privilege rather than prompt wording alone: destructive requests are refused, and when the plan is a direct answer or a refusal the model is given no tools at all; at most three tool calls run per step; content from files, documents and web pages is treated as untrusted data; and every tool call is schema-validated, time-limited and traced.
@@ -276,7 +276,7 @@ See [DEMO.md](DEMO.md) for reproducible examples.
 ## Testing
 
 ```bash
-pytest                 # 206 unit and integration tests (the model is mocked)
+pytest                 # 223 unit and integration tests (the model is mocked)
 pytest -m ollama       # live tests against a running Ollama
 ruff check src tests && mypy src tests   # lint and strict type checking
 ```
@@ -290,7 +290,7 @@ The [live test battery](evals/live_battery/) drives a running CORTEX like the UI
 - [ ] Hybrid retrieval (BM25 + vector) with a reranker and mandatory citations
 - [ ] Human handoff when the agent stalls or is not confident
 - [ ] Merge near-duplicate memory facts before storing them
-- [ ] Read-only workspace file access from the Python sandbox
+- [x] Read-only workspace file access from the Python sandbox
 - [ ] Azure OpenAI / OpenAI-compatible model adapter
 - [ ] Voice I/O (Whisper + TTS, fully local)
 - [ ] Vision tool (LLaVA integration)

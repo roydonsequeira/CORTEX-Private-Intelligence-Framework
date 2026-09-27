@@ -1,7 +1,6 @@
 """Filesystem tool — safe read/write/list/exists under an allowed root."""
 
 import json
-import re
 import time
 from pathlib import Path
 
@@ -9,11 +8,9 @@ import anyio
 
 from cortex.config.settings import Settings
 from cortex.tools.base import BaseTool, ToolResult, ToolSchema
+from cortex.tools.workspace import check_readable_file, ensure_text, resolve_workspace_path
 
-_MAX_READ_BYTES = 1_048_576
 _MAX_WRITE_BYTES = 524_288
-# "C:/..." or "c:\..." (after backslashes are normalised to "/").
-_WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:(/|$)")
 
 
 def infer_action(kwargs: dict[str, object]) -> str:
@@ -100,58 +97,14 @@ class FileSystemTool(BaseTool):
             return _result(False, "", time.monotonic() - start, str(exc))
 
     def _resolve_path(self, raw_path: str) -> Path:
-        """Resolve and validate a relative path under the allowed root.
-
-        Models often address the workspace root as "/", "./" or "" and prefix
-        relative paths with "/"; those are normalised to the root. Real absolute
-        paths (drive letters, UNC) and any ".." traversal are rejected.
-        """
-        cleaned = raw_path.strip().replace("\\", "/")
-        denied = OSError(
-            f"Access denied: '{raw_path}' is outside the CORTEX workspace. "
-            "Only paths relative to the workspace root are allowed."
-        )
-        if cleaned in ("", ".", "/", "./", "~"):
-            cleaned = "."
-        elif cleaned.startswith("/") and not cleaned.startswith("//"):
-            # "/README.md" usually means the workspace root, but "/etc/passwd"
-            # is a real absolute path: only accept it if it exists in the workspace.
-            relative = cleaned.lstrip("/")
-            if not (self._allowed_root / relative).exists():
-                raise denied
-            cleaned = relative
-        candidate = Path(cleaned)
-        if ".." in candidate.parts:
-            raise OSError(
-                "Access denied: paths must stay inside the CORTEX workspace and must not "
-                "contain '..'. Files outside the workspace cannot be read or written."
-            )
-        # Checked textually as well: on Linux, Path("C:/Windows") has no drive and
-        # is not absolute, so a Windows-style path would otherwise be treated as a
-        # relative folder named "C:" instead of being denied.
-        if (
-            candidate.is_absolute()
-            or candidate.drive
-            or cleaned.startswith("//")
-            or _WINDOWS_DRIVE.match(cleaned)
-        ):
-            raise denied
-        resolved = (self._allowed_root / candidate).resolve()
-        if not resolved.is_relative_to(self._allowed_root):
-            raise denied
-        return resolved
+        """Resolve and validate a path under the allowed root (see resolve_workspace_path)."""
+        return resolve_workspace_path(self._allowed_root, raw_path)
 
     async def _read_file(self, path: Path) -> str:
         """Read a UTF-8 text file up to the maximum allowed size."""
-        if not path.exists():
-            raise OSError(f"File not found: {self._display(path)}")
-        if not path.is_file():
-            raise OSError(f"Not a file: {self._display(path)}")
-        if path.stat().st_size > _MAX_READ_BYTES:
-            raise OSError("File exceeds 1MB read limit.")
+        check_readable_file(path, self._display(path))
         raw = await anyio.Path(path).read_bytes()
-        if b"\x00" in raw[:4096]:
-            raise OSError(f"{self._display(path)} looks like a binary file; only text can be read.")
+        ensure_text(raw, self._display(path))
         return raw.decode("utf-8", errors="replace")
 
     async def _write_file(self, path: Path, content: str, overwrite: bool = False) -> str:

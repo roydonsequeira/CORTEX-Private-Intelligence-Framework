@@ -8,6 +8,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A made-up count from "read a file, then use Python".** Asked to "read
+  README.md, then use Python to count" a word, `qwen2.5:7b` wrote
+  `open('README.md')`; the sandbox had no `open`, the code failed, and the model
+  stated a count it never computed (10; the real count was 24). The restricted
+  sandbox now has a read-only `open()` confined to the workspace — the filesystem
+  tool's path rules (shared in `cortex/tools/workspace.py`), no hidden paths such
+  as `.env`, `.git` or `.cortex`, and an in-memory copy instead of a file handle.
+  `python_exec` and the system prompt tell the model what its backend allows (the
+  container backend still has no file access), and the prompt now forbids stating
+  the result a failed tool call was meant to compute. Live cases 37 and J05 now
+  check the actual number; before, 37 only checked that the file was read, so it
+  passed on the made-up count.
+
 - `doc_search` no longer rejects a whole call over an out-of-range number: the
   schema's hard `minimum`/`maximum` on `top_k`, `chunk_size` and `overlap` are
   gone and the tool clamps them instead (overlap capped at half a chunk). Seen
