@@ -55,7 +55,7 @@ def cannot_run_reply(user_input: str, history: list[Message]) -> str | None:
     install = f"pip install {' '.join(packages)}\n" if packages else ""
     return (
         f"I can't run this program here: {'; '.join(reasons)}. CORTEX runs code in a "
-        "locked-down sandbox with no window, no keyboard, no network or file access, "
+        "locked-down sandbox with no window, no keyboard and no network, "
         "and only safe standard-library modules, so it can only execute code that "
         "computes and prints a result.\n\n"
         "To run it on your machine, save the code as a `.py` file and run:\n\n"
