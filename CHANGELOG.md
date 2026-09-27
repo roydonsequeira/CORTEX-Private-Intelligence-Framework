@@ -9,6 +9,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Documentation
 
 - A live demo GIF at the top of the README (`docs/assets/demo.gif`).
+- The README no longer says OpenTelemetry is on by default: export is on in the
+  Docker stack and off in the shipped `cortex.yaml`.
 
 ## [1.1.0] - 2026-09-25
 
