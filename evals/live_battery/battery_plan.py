@@ -448,7 +448,9 @@ CASES = [
         "turns": [
             {
                 "p": 'Read README.md, then use Python to count how many times the word "memory" appears',
-                "tools": ["filesystem"],
+                # The number is checked directly; reading the file with Python's
+                # open() is as good as the filesystem tool.
+                "tools": ["python_exec"],
                 "nums": _memory_counts(),
                 "maxs": 90,
             }

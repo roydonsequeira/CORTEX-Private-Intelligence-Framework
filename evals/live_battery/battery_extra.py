@@ -846,7 +846,7 @@ CASES = [
     one(
         "J05 readme+python",
         "Read README.md and use Python to count how many lines it has",
-        tools=["filesystem"],
+        tools=["python_exec"],
         nums=_readme_line_counts(),
         maxs=90,
     ),
