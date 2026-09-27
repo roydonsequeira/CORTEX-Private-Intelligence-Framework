@@ -15,9 +15,9 @@ _PARAMETERS = {
     "additionalProperties": False,
 }
 _READS_WORKSPACE_DESCRIPTION = (
-    "Execute Python code in a sandboxed environment. open() can read (not write) files "
-    "in the CORTEX workspace, by paths relative to it. No network, no subprocess. Use "
-    "for computation, data transformation, and analysis — including over file contents."
+    "Execute Python code in a sandboxed environment. Code can read workspace files with "
+    "open() but not write them; no network, no subprocess. Use for computation, data "
+    "transformation, and analysis."
 )
 
 

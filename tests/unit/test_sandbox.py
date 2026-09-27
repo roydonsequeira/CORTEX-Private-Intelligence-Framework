@@ -370,6 +370,6 @@ def test_create_sandbox_gives_restricted_backend_the_workspace(tmp_path: Any) ->
 
     reads = CodeExecutionTool.from_settings(Settings(code_sandbox="restricted"))
     no_files = CodeExecutionTool.from_settings(Settings(code_sandbox="container"))
-    assert "open() can read (not write)" in reads.schema.description
+    assert "read workspace files with open()" in reads.schema.description
     assert "No file access" in no_files.schema.description
     assert reads.schema.name == no_files.schema.name == "python_exec"
