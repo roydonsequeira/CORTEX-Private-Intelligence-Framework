@@ -357,6 +357,40 @@ async def test_doc_search_index_with_query_also_searches(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+async def test_doc_search_accepts_out_of_range_numbers_from_the_model(tmp_path: Path) -> None:
+    """chunk_size=100 (seen live from qwen2.5:7b) is clamped, not rejected by the schema."""
+    from cortex.tools.builtin.doc_search import DocumentSearchTool
+
+    (tmp_path / "README.md").write_text("CORTEX uses qwen2.5:7b and nomic-embed-text.")
+    registry = ToolRegistry()
+    registry.register(DocumentSearchTool(_FakeSemanticMemory(), allowed_root=tmp_path))  # type: ignore[arg-type]
+
+    result = await registry.execute(
+        "doc_search",
+        query="models used by CORTEX",
+        path="README.md",
+        chunk_size=100,
+        overlap=50,
+        top_k=50,
+    )
+
+    assert result.success is True, result.error
+    assert "nomic-embed-text" in result.output
+
+
+def test_doc_search_clamps_chunk_arguments() -> None:
+    """Out-of-range sizes are clamped; overlap never exceeds half a chunk."""
+    from cortex.tools.builtin.doc_search import _chunk_args, _int_arg
+
+    assert _chunk_args({}) == (512, 64)
+    assert _chunk_args({"chunk_size": 100, "overlap": 50}) == (128, 50)
+    assert _chunk_args({"chunk_size": 9000, "overlap": 5000}) == (4096, 1024)
+    assert _chunk_args({"chunk_size": 200, "overlap": 190}) == (200, 100)
+    assert _int_arg(0, 5, 1, 20) == 1
+    assert _int_arg("7", 5, 1, 20) == 7
+
+
+@pytest.mark.asyncio
 async def test_python_exec_repairs_double_escaped_newlines() -> None:
     """Code sent with literal backslash-n line breaks still runs."""
     code = "def f(a, b):" + "\n" + "    return a + b" + "\n" + "print(f(1, 2))"
