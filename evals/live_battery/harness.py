@@ -6,6 +6,7 @@ touch your real memory or workspace (see README.md in this folder).
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -102,6 +103,11 @@ def check(turn: dict[str, Any], result: dict[str, Any]) -> list[str]:
         problems.append(f"missing={missing}")
     if turn.get("any") and not any(has(a) for a in turn["any"]):
         problems.append(f"none of={turn['any']}")
+    # An exact number, standing alone ("24", not the 24 in "124" or "2.4").
+    if turn.get("nums") and not any(
+        re.search(rf"(?<![\d.]){re.escape(n)}(?![\d.])", plain) for n in turn["nums"]
+    ):
+        problems.append(f"none of numbers={turn['nums']}")
     present = [n for n in turn.get("notreq", []) if n.lower() in low]
     if present:
         problems.append(f"should not contain={present}")

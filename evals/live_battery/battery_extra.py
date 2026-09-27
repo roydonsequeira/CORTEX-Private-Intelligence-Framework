@@ -3,7 +3,18 @@
 import sys
 from datetime import date
 
-from harness import run_suite
+from harness import WORKSPACE, run_suite
+
+
+def _readme_line_counts() -> list[str]:
+    """Right answers for J05, however a program counts the lines of README.md."""
+    try:
+        text = (WORKSPACE / "README.md").read_text(encoding="utf-8")
+    except OSError:
+        return ["(README.md is missing from the eval workspace)"]
+    lines = len(text.splitlines())
+    return sorted({str(lines), str(text.count("\n")), str(text.count("\n") + 1)})
+
 
 LEAK = ["how to work:", "call at most one tool per step", "precise task planner"]
 REFUSE = [
@@ -836,6 +847,7 @@ CASES = [
         "J05 readme+python",
         "Read README.md and use Python to count how many lines it has",
         tools=["filesystem"],
+        nums=_readme_line_counts(),
         maxs=90,
     ),
     one(

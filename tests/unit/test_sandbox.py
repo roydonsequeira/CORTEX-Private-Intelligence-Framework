@@ -244,3 +244,132 @@ def test_trailing_assignment_is_reported_when_nothing_printed() -> None:
     assert _run_code("result = 2**100 // 3") == "result = 422550200076076467165567735125"
     assert _run_code("x = 5\nx += 2") == "x = 7"
     assert _run_code("print(1)\ny = 3") == "1"  # printed output wins
+
+
+# --- read-only workspace open() ----------------------------------------------
+
+
+def _workspace(tmp_path: Any) -> Any:
+    """A workspace root inside tmp_path, so tmp_path itself is 'outside' it."""
+    root = (tmp_path / "ws").resolve()
+    root.mkdir()
+    return root
+
+
+@pytest.mark.asyncio
+async def test_restricted_sandbox_reads_workspace_files(tmp_path: Any) -> None:
+    """The exact code qwen2.5:7b wrote for "read README.md, then count" now runs.
+
+    Without open() it failed with NameError and the model stated a made-up count.
+    """
+    root = _workspace(tmp_path)
+    (root / "README.md").write_text("memory tiers: memory, Memory, memory\n", encoding="utf-8")
+    code = (
+        "with open('README.md', 'r') as file:\n"
+        "    content = file.read()\n"
+        "content.count('memory')"
+    )
+    result = await RestrictedSandbox(allowed_root=root).run(code, timeout_seconds=10.0)
+    assert result.success is True, result.error
+    assert result.output == "3"
+
+
+@pytest.mark.parametrize(
+    ("code", "error"),
+    [
+        ("open('notes.txt', 'w')", "read-only"),
+        ("open('notes.txt', 'a')", "read-only"),
+        ("open('notes.txt', 'r+')", "read-only"),
+        ("open('../outside.txt').read()", "Access denied"),
+        ("open('.env').read()", "hidden files"),
+        ("open('.git/config').read()", "hidden files"),
+        ("open('missing.txt').read()", "File not found"),
+        ("open('data.bin').read()", "binary file"),
+        ("open('big.txt').read()", "1MB"),
+        ("open(3)", "path relative to the CORTEX workspace"),
+    ],
+)
+def test_workspace_open_is_read_only_and_confined(tmp_path: Any, code: str, error: str) -> None:
+    """Writes, traversal, hidden paths, binaries and oversized files are refused."""
+    from cortex.tools.sandbox import _run_code
+
+    root = _workspace(tmp_path)
+    (root / "notes.txt").write_text("keep me", encoding="utf-8")
+    (root / ".env").write_text("SECRET=1", encoding="utf-8")
+    (root / ".git").mkdir()
+    (root / ".git" / "config").write_text("[core]", encoding="utf-8")
+    (root / "data.bin").write_bytes(b"abc\x00def")
+    (root / "big.txt").write_bytes(b"a" * 1_048_577)
+    (tmp_path / "outside.txt").write_text("outside", encoding="utf-8")
+
+    with pytest.raises((OSError, TypeError)) as exc_info:
+        _run_code(code, str(root))
+    assert error in str(exc_info.value)
+    assert (root / "notes.txt").read_text(encoding="utf-8") == "keep me"
+
+
+def test_workspace_open_refuses_absolute_paths_outside(tmp_path: Any) -> None:
+    """An absolute path to a real file outside the workspace is denied."""
+    from cortex.tools.sandbox import _run_code
+
+    root = _workspace(tmp_path)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    with pytest.raises(OSError, match="Access denied"):
+        _run_code(f"open({str(outside)!r}).read()", str(root))
+
+
+def test_workspace_open_refuses_symlink_escape(tmp_path: Any) -> None:
+    """A symlink inside the workspace that points outside it is denied."""
+    from cortex.tools.sandbox import _run_code
+
+    root = _workspace(tmp_path)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    try:
+        (root / "link.txt").symlink_to(outside)
+    except OSError:
+        pytest.skip("creating symlinks is not permitted here")
+    with pytest.raises(OSError, match="Access denied"):
+        _run_code("open('link.txt').read()", str(root))
+
+
+def test_workspace_open_reads_like_open(tmp_path: Any) -> None:
+    """Text mode translates CRLF line endings; 'rb' returns bytes; lines iterate."""
+    from cortex.tools.sandbox import _run_code
+
+    root = _workspace(tmp_path)
+    (root / "data.csv").write_bytes(b"name,score\r\nada,3\r\nsam,4\r\n")
+    assert _run_code("print(len(open('data.csv').readlines()))", str(root)) == "3"
+    assert _run_code("print(open('data.csv', 'rb').read()[:4])", str(root)) == "b'name'"
+    code = (
+        "total = 0\n"
+        "for line in open('data.csv', encoding='utf-8').readlines()[1:]:\n"
+        "    total += int(line.strip().split(',')[1])\n"
+        "print(total)"
+    )
+    assert _run_code(code, str(root)) == "7"
+
+
+@pytest.mark.asyncio
+async def test_sandbox_without_workspace_has_no_open() -> None:
+    """A sandbox built without a workspace root still has no file access at all."""
+    result = await RestrictedSandbox().run("open('README.md')", timeout_seconds=10.0)
+    assert result.success is False
+    assert "open" in (result.error or "")
+
+
+def test_create_sandbox_gives_restricted_backend_the_workspace(tmp_path: Any) -> None:
+    """Only the restricted backend reads the workspace; python_exec describes each."""
+    from cortex.tools.builtin.code_exec import CodeExecutionTool
+
+    restricted = create_sandbox(Settings(code_sandbox="restricted", allowed_root=tmp_path))
+    container = create_sandbox(Settings(code_sandbox="container", allowed_root=tmp_path))
+    assert restricted.reads_workspace is True
+    assert container.reads_workspace is False
+
+    reads = CodeExecutionTool.from_settings(Settings(code_sandbox="restricted"))
+    no_files = CodeExecutionTool.from_settings(Settings(code_sandbox="container"))
+    assert "open() can read (not write)" in reads.schema.description
+    assert "No file access" in no_files.schema.description
+    assert reads.schema.name == no_files.schema.name == "python_exec"

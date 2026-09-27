@@ -4,7 +4,8 @@ Two backends implement the same ``CodeSandbox`` contract:
 
 - ``restricted`` — the default. RestrictedPython compiled code run in a spawned
   process with a hard timeout and a guarded globals dict. Best-effort, in-process,
-  and appropriate for trusted/local use.
+  and appropriate for trusted/local use. Given the workspace root, its ``open()``
+  can read (never write) workspace files, under the filesystem tool's path rules.
 - ``container`` — each snippet runs real CPython in an ephemeral Docker container
   with the network disabled, a read-only root filesystem, all Linux capabilities
   dropped, ``no-new-privileges``, a tmpfs workdir, and CPU/memory/pid limits. The
@@ -27,7 +28,9 @@ import operator
 import types
 import warnings
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
@@ -42,6 +45,7 @@ from RestrictedPython.PrintCollector import PrintCollector
 
 from cortex.config.settings import Settings
 from cortex.observability.tracing import get_tracer
+from cortex.tools.workspace import check_readable_file, ensure_text, resolve_workspace_path
 
 _tracer = get_tracer(__name__)
 
@@ -57,6 +61,10 @@ class SandboxResult(BaseModel):
 class CodeSandbox(ABC):
     """A backend that runs a Python snippet under some isolation guarantee."""
 
+    # Whether snippets can read workspace files with open(); python_exec tells the
+    # model so, and otherwise that there is no file access.
+    reads_workspace: bool = False
+
     @abstractmethod
     async def run(self, code: str, timeout_seconds: float) -> SandboxResult:
         """Execute code and return its collected stdout or an error."""
@@ -64,7 +72,15 @@ class CodeSandbox(ABC):
 
 
 class RestrictedSandbox(CodeSandbox):
-    """Best-effort in-process sandbox using RestrictedPython in a spawned process."""
+    """Best-effort in-process sandbox using RestrictedPython in a spawned process.
+
+    With ``allowed_root`` set, snippets get a read-only ``open()`` for files in
+    that workspace (see ``_workspace_open``); without it there is no file access.
+    """
+
+    def __init__(self, allowed_root: str | Path | None = None) -> None:
+        self._allowed_root = str(Path(allowed_root).resolve()) if allowed_root is not None else None
+        self.reads_workspace = self._allowed_root is not None
 
     async def run(self, code: str, timeout_seconds: float) -> SandboxResult:
         """Run RestrictedPython-compiled code in a spawned, time-limited process."""
@@ -73,7 +89,7 @@ class RestrictedSandbox(CodeSandbox):
         with _tracer.start_as_current_span("sandbox.restricted.run") as span:
             span.set_attribute("sandbox.backend", "restricted")
             success, output, error = await asyncio.to_thread(
-                _run_code_in_subprocess, code, timeout_seconds
+                _run_code_in_subprocess, code, timeout_seconds, self._allowed_root
             )
         return SandboxResult(success=success, output=output, error=error)
 
@@ -170,17 +186,19 @@ def create_sandbox(settings: Settings) -> CodeSandbox:
             pids_limit=settings.code_sandbox_pids_limit,
             cpus=settings.code_sandbox_cpus,
         )
-    return RestrictedSandbox()
+    return RestrictedSandbox(allowed_root=settings.allowed_root)
 
 
 # --- RestrictedPython execution primitives (used by RestrictedSandbox) ---------
 
 
-def _run_code_in_subprocess(code: str, timeout_seconds: float) -> tuple[bool, str, str | None]:
+def _run_code_in_subprocess(
+    code: str, timeout_seconds: float, allowed_root: str | None = None
+) -> tuple[bool, str, str | None]:
     """Run code in a subprocess and terminate it on hard timeout."""
     ctx = multiprocessing.get_context("spawn")
     queue: Any = ctx.Queue()
-    process = ctx.Process(target=_sandbox_worker, args=(code, queue))
+    process = ctx.Process(target=_sandbox_worker, args=(code, queue, allowed_root))
     process.start()
     process.join(timeout_seconds)
     if process.is_alive():
@@ -193,10 +211,10 @@ def _run_code_in_subprocess(code: str, timeout_seconds: float) -> tuple[bool, st
     return bool(success), str(output), None if error is None else str(error)
 
 
-def _sandbox_worker(code: str, queue: Any) -> None:
+def _sandbox_worker(code: str, queue: Any, allowed_root: str | None = None) -> None:
     """Execute restricted code in an isolated worker process."""
     try:
-        queue.put((True, _run_code(code), None))
+        queue.put((True, _run_code(code, allowed_root), None))
     except Exception as exc:
         # All errors from untrusted code (including RestrictedPython guard
         # violations, which raise AttributeError) are reported as a failed
@@ -212,7 +230,7 @@ _NO_OUTPUT_MESSAGE = (
 )
 
 
-def _run_code(code: str) -> str:
+def _run_code(code: str, allowed_root: str | None = None) -> str:
     """Run RestrictedPython code and return collected output.
 
     A single namespace is used for globals and locals so that a top-level
@@ -236,7 +254,7 @@ def _run_code(code: str) -> str:
             if isinstance(detail, tuple):
                 detail = "; ".join(str(item) for item in detail)
             raise SyntaxError(str(detail)) from None
-    namespace = _safe_globals()
+    namespace = _safe_globals(allowed_root)
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):
         exec(byte_code, namespace)  # noqa: S102
@@ -408,9 +426,56 @@ def _inplace_var(op: str, target: Any, value: Any) -> Any:
         raise SyntaxError(f"unsupported augmented assignment operator {op!r}") from None
 
 
-def _safe_globals() -> dict[str, Any]:
-    """Return the restricted globals dict used for all code execution."""
+_READ_MODES = frozenset({"r", "rt", "tr", "rb", "br"})
+
+
+def _workspace_open(root: Path) -> Callable[..., io.StringIO | io.BytesIO]:
+    """Build the sandbox's ``open()``: read-only and confined to the workspace ``root``.
+
+    Seen live: asked to "read README.md, then use Python to count" a word, the
+    model wrote ``with open('README.md') as f``; with no ``open`` the code failed
+    and the model stated a count it never computed. This opener follows the
+    filesystem tool's path rules (no "..", no absolute paths, symlinks resolved
+    inside the root, 1 MB, text only) and also refuses hidden paths such as
+    .env, .git and .cortex. The file is read here, by trusted code, and handed to
+    the snippet as an in-memory copy, so the snippet never holds a real file handle.
+    Extra arguments (encoding, newline, ...) are accepted and ignored.
+    """
+
+    def sandbox_open(
+        file: object, mode: str = "r", *args: object, **kwargs: object
+    ) -> io.StringIO | io.BytesIO:
+        if not isinstance(file, str):
+            raise TypeError("open() takes a path relative to the CORTEX workspace")
+        if mode not in _READ_MODES:
+            raise PermissionError(
+                "open() in the sandbox is read-only; to save a file, use the filesystem tool"
+            )
+        path = resolve_workspace_path(root, file)
+        relative = path.relative_to(root)
+        display = relative.as_posix()
+        if any(part.startswith(".") for part in relative.parts):
+            raise PermissionError(f"hidden files cannot be opened in the sandbox: {display}")
+        check_readable_file(path, display)
+        raw = path.read_bytes()
+        ensure_text(raw, display)
+        if "b" in mode:
+            return io.BytesIO(raw)
+        # Text mode translates line endings, as open() does.
+        text = raw.decode("utf-8", errors="replace")
+        return io.StringIO(text.replace("\r\n", "\n").replace("\r", "\n"))
+
+    return sandbox_open
+
+
+def _safe_globals(allowed_root: str | None = None) -> dict[str, Any]:
+    """Return the restricted globals dict used for all code execution.
+
+    ``open`` exists only when a workspace root is given, and only for reading.
+    """
     builtins = dict(safe_builtins)
+    if allowed_root is not None:
+        builtins["open"] = _workspace_open(Path(allowed_root).resolve())
     builtins.update(
         {
             "__import__": _safe_import,
