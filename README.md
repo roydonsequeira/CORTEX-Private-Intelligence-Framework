@@ -12,6 +12,10 @@
 ![FastAPI](https://img.shields.io/badge/API-FastAPI-009688)
 ![Next.js](https://img.shields.io/badge/UI-Next.js-black)
 
+![CORTEX answering questions, running sandboxed Python, saving a file, remembering the user after a page refresh, refusing a prompt injection and blocking a localhost fetch](docs/assets/demo.gif)
+
+*Recorded live on a 6 GB laptop GPU with `qwen2.5:7b` (model thinking time sped up): a direct answer, sandboxed Python, a saved file, memory across a page refresh, a refused "delete every file" injection, a question about the README, a web fetch, a blocked request to localhost, and a multi-step calculation.*
+
 ## What is CORTEX?
 
 Cloud AI is powerful, but everything you send to it can be logged, retained, inspected, or used to train future models. Prompts, files, private notes, source code, and research questions leave your machine and enter systems you do not control.

@@ -6,6 +6,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Documentation
+
+- A live demo GIF at the top of the README (`docs/assets/demo.gif`).
+
 ## [1.1.0] - 2026-09-25
 
 A 187-case live test battery against `qwen2.5:7b` (now in `evals/live_battery/`)
