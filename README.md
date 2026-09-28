@@ -5,7 +5,7 @@
 **A private AI agent that runs entirely on your own machine** — it plans, uses sandboxed tools, remembers you across sessions, and streams every step live, on a laptop GPU with 6 GB of VRAM. No cloud, no API keys, nothing leaves your computer.
 
 [![CI](https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/actions/workflows/ci.yml/badge.svg)](https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/actions/workflows/ci.yml)
-![Tests](https://img.shields.io/badge/tests-223%20unit%20%2B%20187%20live-brightgreen)
+![Tests](https://img.shields.io/badge/tests-250%20unit%20%2B%20187%20live-brightgreen)
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Docker](https://img.shields.io/badge/Docker-Compose-blue)
@@ -218,7 +218,7 @@ CORTEX is designed to run on hardware you control, and its guardrails are built 
 - **Web fetch** reaches public hosts only: loopback, private-network, link-local (cloud metadata) and reserved addresses are refused after DNS resolution and again on every redirect hop, so a prompt or an injected page cannot use it to probe your machine or network. It honours `robots.txt`, verifies TLS against the operating system trust store, stops downloading at 2 MB (a link to a huge file can't fill memory), refuses binary files such as PDFs and images without downloading them, caps output size, and reports specific errors (HTTP status, timeout, offline).
 - **Quoted and pasted text is data:** text you hand CORTEX to summarise, translate or analyse never counts as you asking for a file write, a tool or a run, and a file is overwritten only when you explicitly ask.
 - **Calculator** evaluates an expression tree without `eval` and bounds exponents and factorials, so an expression like `9**9**9` cannot stall the API.
-- **API** requests are validated with Pydantic, rate limited per IP with a token bucket, and refused while the server drains for graceful shutdown. Authentication is off by default for localhost; set `api_key` (e.g. via `CORTEX_API_KEY`) to require a bearer token on every route except `/health` and the docs, and narrow `cors_origins` before exposing the API beyond your machine.
+- **API** requests are validated with Pydantic, rate limited per IP with a token bucket, and refused while the server drains for graceful shutdown. Authentication is off by default for localhost; set `api_key` (e.g. via `CORTEX_API_KEY`) to require a bearer token on every route except `/health` and the docs, and narrow `cors_origins` before exposing the API beyond your machine. The bundled UI doesn't send a key, so it stops working once `api_key` is set; to use the UI remotely, put an authenticating reverse proxy in front of both instead.
 
 Report security issues privately via a GitHub security advisory rather than a public issue.
 
@@ -278,7 +278,7 @@ See [DEMO.md](DEMO.md) for reproducible examples.
 ## Testing
 
 ```bash
-pytest                 # 223 unit and integration tests (the model is mocked)
+pytest                 # 250 unit and integration tests (the model is mocked)
 pytest -m ollama       # live tests against a running Ollama
 ruff check src tests && mypy src tests   # lint and strict type checking
 ```
