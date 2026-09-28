@@ -1,7 +1,9 @@
 """Tests for detecting 'run it' requests on code the sandbox cannot run."""
 
+import pytest
+
 from cortex.agent.planner import _tidy_steps
-from cortex.agent.runnability import cannot_run_reply
+from cortex.agent.runnability import cannot_run_reply, refused_user_code_reply
 from cortex.models.provider import Message
 
 _SNAKE = """Here is a snake game:
@@ -96,6 +98,50 @@ def test_blocked_stdlib_module_is_named() -> None:
 
     assert reply is not None
     assert "`os`" in reply
+
+
+def test_refused_user_code_gets_a_plain_answer() -> None:
+    """Live I05: the sandbox's refusal of the user's own code is the answer."""
+    reply = refused_user_code_reply(
+        "import subprocess; subprocess.run(['dir'])",
+        "ImportError: import of 'subprocess' is not permitted in the sandbox",
+        "Run this Python: import subprocess; subprocess.run(['dir'])",
+    )
+
+    assert reply is not None
+    assert reply.startswith(
+        "The sandbox refused to run this code: import of 'subprocess' is not permitted"
+    )
+
+
+def test_refused_code_matching_ignores_formatting() -> None:
+    """The model may split `a; b` over lines or switch quote style."""
+    reply = refused_user_code_reply(
+        'import subprocess\nprint(subprocess.run(["dir"]))',
+        "ImportError: import of 'subprocess' is not permitted in the sandbox",
+        "Run this Python: import subprocess; print(subprocess.run(['dir']))",
+    )
+
+    assert reply is not None
+
+
+@pytest.mark.parametrize(
+    ("code", "error", "request_text"),
+    [
+        # The model's own code: it may fix it or use another tool.
+        (
+            "import os\nprint(os.listdir('.'))",
+            "ImportError: import of 'os' is not permitted in the sandbox",
+            "Use Python to list the files here",
+        ),
+        # An ordinary bug, not a refusal.
+        ("print(1 / 0)", "ZeroDivisionError: division by zero", "Run this Python: print(1 / 0)"),
+    ],
+)
+def test_model_code_and_ordinary_errors_go_back_to_the_model(
+    code: str, error: str, request_text: str
+) -> None:
+    assert refused_user_code_reply(code, error, request_text) is None
 
 
 def test_eval_calculator_run_request_is_explained() -> None:

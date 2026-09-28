@@ -53,6 +53,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `__dict__` (the typical generated calculator) gets a clear "can't run this
   here" answer with the command to run it locally. Before, the model retried,
   failed and replied with an unrelated request for clarification.
+- **When the sandbox refuses code you supplied, CORTEX says so and stops.**
+  Live cases I05 and I17: after the sandbox refused a shell command written in
+  Python, the model listed the workspace with the filesystem tool and answered
+  with the listing, as if the command had run. A refusal of the user's own code
+  now ends the run with a plain explanation, and later tool calls in that step
+  are skipped. Code the model wrote itself can still be fixed and retried.
 - `web_fetch` stops downloading at its 2 MB cap. Before, it read the whole
   response into memory first, so a link to a multi-gigabyte file could exhaust
   memory. PDFs, images, archives and other binary files are now refused with a

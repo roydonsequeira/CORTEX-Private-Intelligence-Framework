@@ -67,6 +67,44 @@ def cannot_run_reply(user_input: str, history: list[Message]) -> str | None:
     )
 
 
+# Sandbox refusals are policy, not mistakes in the code: a blocked import, a
+# forbidden name or attribute, a write through the read-only open().
+_SANDBOX_REFUSAL = re.compile(
+    r"not permitted in the sandbox|is an invalid (?:variable|attribute) name"
+    r"|calls are not allowed|in the sandbox is read-only|cannot be opened in the sandbox",
+    re.IGNORECASE,
+)
+_ERROR_PREFIX = re.compile(r"^(?:\w+(?:Error|Exception):\s*)?(?:Line \d+:\s*)?")
+
+
+def refused_user_code_reply(code: object, error: str | None, user_input: str) -> str | None:
+    """The answer when the sandbox refused code the user supplied themselves.
+
+    Seen live (battery cases I05, I17): asked to run code the sandbox refused,
+    the model then did the same thing with the filesystem tool and answered
+    with a directory listing, as if the code had run. When the refused code
+    is the user's own (it appears in their message), the run ends with this
+    answer. Code the model wrote itself can still be fixed and retried.
+    """
+    if not isinstance(code, str) or not error or not _SANDBOX_REFUSAL.search(error):
+        return None
+    compact = _compact(code)
+    if len(compact) < 8 or compact not in _compact(user_input):
+        return None
+    reason = _ERROR_PREFIX.sub("", error.split(";")[0].strip()).rstrip(".")
+    return (
+        f"The sandbox refused to run this code: {reason}. CORTEX runs Python in a "
+        "locked-down sandbox (safe standard-library modules only; no system commands, "
+        "network access or file writes), so it can only run code that computes and "
+        "prints a result."
+    )
+
+
+def _compact(text: str) -> str:
+    """Text without whitespace or semicolons and with one quote style, to match code."""
+    return re.sub(r"[\s;]+", "", text).replace("'", '"')
+
+
 def _blocked_constructs(code: str) -> list[str]:
     """Reasons for calls and attributes the sandbox refuses at compile time.
 
