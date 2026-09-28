@@ -54,6 +54,56 @@ def test_settings_load_from_parent_directory(
     assert s.api_port == 9100
 
 
+def test_relative_yaml_paths_are_relative_to_the_config_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Starting CORTEX from a subfolder must not move its memory or workspace."""
+    # conftest points these at tmp_path through env vars, which override the file.
+    monkeypatch.delenv("CORTEX_DB_PATH")
+    monkeypatch.delenv("CORTEX_CHROMA_PATH")
+    (tmp_path / "cortex.yaml").write_text(
+        yaml.dump(
+            {
+                "db_path": "./.cortex/cortex.db",
+                "chroma_path": ".cortex/chroma",
+                "allowed_root": "./workspace",
+                "plugins_dir": "./plugins",
+                "task_db_path": str(tmp_path / "abs" / "tasks.db"),
+            }
+        )
+    )
+    nested = tmp_path / "ui"
+    nested.mkdir()
+    monkeypatch.chdir(nested)
+    get_settings.cache_clear()
+    s = get_settings()
+    assert s.db_path == tmp_path / ".cortex" / "cortex.db"
+    assert s.chroma_path == tmp_path / ".cortex" / "chroma"
+    assert s.allowed_root == tmp_path / "workspace"
+    assert s.plugins_dir == tmp_path / "plugins"
+    assert s.task_db_path == tmp_path / "abs" / "tasks.db"  # absolute paths are kept
+
+
+def test_yaml_paths_expand_the_home_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`~/cortex-data` means the home folder, not a directory literally named ~."""
+    monkeypatch.delenv("CORTEX_DB_PATH")
+    (tmp_path / "cortex.yaml").write_text(yaml.dump({"db_path": "~/cortex-data/cortex.db"}))
+    monkeypatch.chdir(tmp_path)
+    get_settings.cache_clear()
+    assert get_settings().db_path == Path.home() / "cortex-data" / "cortex.db"
+
+
+def test_default_workspace_is_a_dedicated_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without configuration the agent's files live in ./workspace, not the project root."""
+    monkeypatch.chdir(tmp_path)
+    get_settings.cache_clear()
+    assert get_settings().allowed_root == Path("workspace")
+
+
 def test_settings_load_from_cortex_config_env_var(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

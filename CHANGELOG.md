@@ -28,6 +28,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the file. An empty search now suggests passing `path` to index and search in
   one call.
 
+- **Memory and workspace moved with the shell's folder.** `cortex.yaml` is found
+  from any subdirectory, but its relative paths were resolved against the folder
+  `cortex serve` was started from. Started from `ui/`, CORTEX quietly used a
+  fresh, empty memory in `ui/.cortex/`, a different workspace, and no plugins.
+  Relative paths in the file are now relative to the file, and `~` expands to
+  the home directory.
+- **`counts[word] += 1` works in `python_exec`** (live case C18). RestrictedPython
+  refuses augmented assignment to items and attributes, so the most common
+  counting idiom was a compile error, and the model sometimes then stated a
+  count it never computed. The sandbox now rewrites it as a read, an update and
+  a write, evaluating the container and key once as Python does. Each step goes
+  through the same guards as ordinary code.
+- `web_fetch` stops downloading at its 2 MB cap. Before, it read the whole
+  response into memory first, so a link to a multi-gigabyte file could exhaust
+  memory. PDFs, images, archives and other binary files are now refused with a
+  clear message, without being downloaded, instead of being decoded into garbage.
+
 ### Documentation
 
 - A live demo GIF at the top of the README (`docs/assets/demo.gif`).
@@ -36,6 +53,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The demo recording guide now covers what the current GIF needed: a private
   window, a chat-column crop, and frame delays browsers honour.
 - Live-battery memory cases and a unit test use neutral personal facts.
+
+### Security
+
+- **The agent's files live in a dedicated `workspace/` folder** (`allowed_root`,
+  next to `cortex.yaml`) instead of the project root. From the project root it
+  could read `cortex.yaml` and write `.py` files into CORTEX's own source,
+  including the plugins folder, whose files run unsandboxed on the next start.
+  To keep the old behaviour, set `allowed_root: .` in `cortex.yaml`; CORTEX's
+  own package and plugins folder then stay write-protected anyway.
+- Hidden files and folders (`.env`, `.git`, `.cortex`, …) are refused for
+  reading, listing and `doc_search` indexing too. Before, only writes were
+  refused, so the filesystem tool could read `.env`. `doc_search` now follows
+  the filesystem tool's path rules and its 1 MB, text-only limit.
+- A root `.dockerignore` keeps `.venv`, `.git`, `.cortex` memory, `.env` and the
+  workspace out of the API image's build context. The Compose stacks mount
+  `./workspace` into the API container.
 
 ## [1.1.0] - 2026-09-25
 

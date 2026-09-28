@@ -44,6 +44,20 @@ class _YamlSource(PydanticBaseSettingsSource):
                 raise ValueError(f"Invalid YAML in {config_path}: {exc}") from exc
         if not isinstance(data, dict):
             raise ValueError(f"{config_path} must contain a mapping of settings.")
+        return self._anchor_paths(data, config_path.parent)
+
+    def _anchor_paths(self, data: dict[str, Any], base: Path) -> dict[str, Any]:
+        """Resolve relative path settings against the config file's directory.
+
+        cortex.yaml is found from any subdirectory, so "./.cortex/cortex.db" must
+        mean next to the file, not next to wherever `cortex serve` was started;
+        otherwise memory, the workspace and plugins silently move with the shell's
+        current directory. "~" expands to the home directory.
+        """
+        for name, field in self.settings_cls.model_fields.items():
+            value = data.get(name)
+            if field.annotation is Path and isinstance(value, str) and value.strip():
+                data[name] = str(base / Path(value.strip()).expanduser())
         return data
 
     def get_field_value(
@@ -152,7 +166,10 @@ class Settings(BaseSettings):
     # Semantic memories below this relevance (1 / (1 + distance)) are not injected.
     semantic_min_relevance: float = 0.0
     plugins_dir: Path = Path("./src/cortex/tools/plugins")
-    allowed_root: Path = Path(".")
+    # The only folder the agent's tools can read and write. A dedicated folder,
+    # not the project root: the agent must not be able to read cortex.yaml or
+    # edit CORTEX's own code (a planted plugin would run unsandboxed on restart).
+    allowed_root: Path = Path("./workspace")
     allowed_write_extensions: list[str] = [".txt", ".md", ".json", ".csv", ".py"]
     tool_timeout_seconds: float = 30.0
     code_exec_timeout_seconds: float = 10.0

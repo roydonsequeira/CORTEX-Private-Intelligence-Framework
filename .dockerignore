@@ -1,0 +1,22 @@
+# The API image copies only pyproject.toml, src/ and cortex.yaml. Everything
+# else stays out of the build context: it is slow to send (.venv, node_modules)
+# or private (.cortex memory, .env, the agent's workspace).
+.git
+.github
+.venv
+venv
+.env
+.env.*
+.cortex
+workspace
+ui
+evals
+tests
+docs
+infra
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+coverage.xml

@@ -56,6 +56,21 @@ def resolve_workspace_path(root: Path, raw_path: str) -> Path:
     return resolved
 
 
+def ensure_not_hidden(root: Path, path: Path) -> None:
+    """Raise OSError if ``path`` is, or is inside, a hidden entry under ``root``.
+
+    Hidden files and folders (.env, .git, .venv, .cortex) hold secrets, history
+    and CORTEX's own memory; no tool reads, lists or writes them, whatever the
+    workspace root is.
+    """
+    relative = path.relative_to(root)
+    if any(part.startswith(".") for part in relative.parts):
+        raise OSError(
+            f"Access denied: hidden files and folders are off-limits ({relative.as_posix()}); "
+            ".env, .git and similar hold secrets and history."
+        )
+
+
 def check_readable_file(path: Path, display: str) -> None:
     """Raise OSError unless ``path`` is an existing regular file within the read limit."""
     if not path.exists():
