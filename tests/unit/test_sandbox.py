@@ -249,6 +249,48 @@ def test_trailing_assignment_is_reported_when_nothing_printed() -> None:
 @pytest.mark.parametrize(
     ("code", "expected"),
     [
+        ("def main():\n    print(42)\nmain()", "42"),
+        ("print(1)\ndef f():\n    print(2)\nf()\nprint(3)", "1\n2\n3"),
+        ("class A:\n    def show(self):\n        print('in method')\nA().show()", "in method"),
+        (
+            "def fact(n):\n    print('n =', n)\n    return 1 if n <= 1 else n * fact(n - 1)\n"
+            "print(fact(3))",
+            "n = 3\nn = 2\nn = 1\n6",
+        ),
+    ],
+)
+def test_print_inside_functions_is_collected_in_order(code: str, expected: str) -> None:
+    """print() in a function or method used to be dropped: each scope had its own collector."""
+    from cortex.tools.sandbox import _run_code
+
+    assert _run_code(code) == expected
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        'def main():\n    print(42)\n\nif __name__ == "__main__":\n    main()',
+        'def main():\n    print(42)\n\nif "__main__" == __name__:\n    main()',
+    ],
+)
+def test_main_guard_programs_run(code: str) -> None:
+    """Generated programs end with a main guard; the sandbox is the main program."""
+    from cortex.tools.sandbox import _run_code
+
+    assert _run_code(code) == "42"
+
+
+def test_other_uses_of_dunder_name_stay_refused() -> None:
+    """Only the exact main guard is rewritten; __name__ itself is still off-limits."""
+    from cortex.tools.sandbox import _run_code
+
+    with pytest.raises(SyntaxError):
+        _run_code("print(__name__)")
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
         # Live case C18: the counting idiom used to be a compile error.
         (
             "counts = {}\nfor w in 'a b a c a'.split():\n"

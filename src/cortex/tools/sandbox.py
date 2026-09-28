@@ -253,11 +253,16 @@ def _run_code(code: str, allowed_root: str | None = None) -> str:
                 detail = "; ".join(str(item) for item in detail)
             raise SyntaxError(str(detail)) from None
     namespace = _safe_globals(allowed_root)
+    # One collector for every scope. RestrictedPython gives each function its
+    # own by default and only the module's was read, so print() inside a
+    # function or method was silently lost ("def main(): print(42)" printed
+    # nothing, and the model was told to use print()).
+    printed = PrintCollector(_guarded_getattr)  # type: ignore[no-untyped-call]
+    namespace["_print_"] = lambda _getattr_=None: printed
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):
         exec(byte_code, namespace)  # noqa: S102
-    printed = namespace.get("_print")
-    collected = printed() if callable(printed) else ""
+    collected = printed()
     direct_stdout = stdout.getvalue()
     parts = [part for part in (direct_stdout, collected) if part]
     value = namespace.get(_REPL_VALUE_NAME)
@@ -280,7 +285,7 @@ def _prepare(code: str) -> str | ast.Module:
         tree = ast.parse(code)
     except SyntaxError:
         return code
-    rewritten: ast.Module = _ItemAugAssign().visit(tree)
+    rewritten: ast.Module = _MainGuard().visit(_ItemAugAssign().visit(tree))
     _capture_last_expression(rewritten)
     ast.fix_missing_locations(rewritten)
     return rewritten
@@ -332,6 +337,36 @@ class _ItemAugAssign(ast.NodeTransformer):
         else:
             return node
         return [ast.copy_location(statement, node) for statement in statements]
+
+
+class _MainGuard(ast.NodeTransformer):
+    """Run the body of ``if __name__ == "__main__":`` unconditionally.
+
+    Complete programs a model writes usually end with this guard, and
+    RestrictedPython rejects the name ``__name__``, so "run it" on such a
+    program was a compile error. The snippet is the main program, so the guard
+    is true; replacing it with its body removes the only reference to
+    ``__name__`` and grants nothing else.
+    """
+
+    def visit_If(self, node: ast.If) -> ast.AST | list[ast.stmt]:
+        self.generic_visit(node)
+        return node.body if _is_main_guard(node.test) else node
+
+
+def _is_main_guard(test: ast.expr) -> bool:
+    """True for ``__name__ == "__main__"`` written either way round."""
+    if not (
+        isinstance(test, ast.Compare)
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Eq)
+        and len(test.comparators) == 1
+    ):
+        return False
+    sides = (test.left, test.comparators[0])
+    names = [side.id for side in sides if isinstance(side, ast.Name)]
+    constants = [side.value for side in sides if isinstance(side, ast.Constant)]
+    return names == ["__name__"] and constants == ["__main__"]
 
 
 def _name(identifier: str, ctx: ast.expr_context | None = None) -> ast.Name:

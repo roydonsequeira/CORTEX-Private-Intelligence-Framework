@@ -6,6 +6,7 @@ program again instead of explaining that it cannot run here. This check lets
 the kernel answer that case directly and consistently, without the model.
 """
 
+import ast
 import re
 import sys
 
@@ -28,6 +29,8 @@ _PIP_NAMES = {
 }
 _MAX_REQUEST_CHARS = 200
 _INPUT_REASON = "it waits for you to type input, and the sandbox has no keyboard"
+# Builtins RestrictedPython refuses to compile a call to.
+_BLOCKED_CALLS = frozenset({"eval", "exec", "compile"})
 
 
 def cannot_run_reply(user_input: str, history: list[Message]) -> str | None:
@@ -64,6 +67,44 @@ def cannot_run_reply(user_input: str, history: list[Message]) -> str | None:
     )
 
 
+def _blocked_constructs(code: str) -> list[str]:
+    """Reasons for calls and attributes the sandbox refuses at compile time.
+
+    Seen live: asked to "run" a calculator it had written with
+    eval(expression, ..., math.__dict__), the model retried twice, failed, and
+    answered with an unrelated request for clarification. Parsed, not searched,
+    so a comment that mentions eval() does not count.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+    calls = sorted(
+        {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in _BLOCKED_CALLS
+        }
+    )
+    internals = sorted(
+        {
+            node.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute) and node.attr.startswith("__")
+        }
+    )
+    reasons = []
+    if calls:
+        names = " and ".join(f"`{name}()`" for name in calls)
+        reasons.append(f"it calls {names}, which the sandbox blocks for safety")
+    if internals:
+        names = ", ".join(f"`{name}`" for name in internals)
+        reasons.append(f"it uses Python internals ({names}) that the sandbox blocks")
+    return reasons
+
+
 def _blockers(code: str) -> tuple[list[str], list[str]]:
     """Return (human-readable reasons, pip packages) that stop code running here."""
     reasons: list[str] = []
@@ -82,6 +123,7 @@ def _blockers(code: str) -> tuple[list[str], list[str]]:
         else:
             reasons.append(f"it needs the `{module}` package, which isn't available in the sandbox")
             packages.append(_PIP_NAMES.get(module, module))
+    reasons.extend(_blocked_constructs(code))
     if re.search(r"\binput\s*\(", code):
         reasons.append(_INPUT_REASON)
     if blocked_stdlib and not reasons:

@@ -40,6 +40,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   count it never computed. The sandbox now rewrites it as a read, an update and
   a write, evaluating the container and key once as Python does. Each step goes
   through the same guards as ordinary code.
+- **`print()` inside a function or method printed nothing in `python_exec`.**
+  RestrictedPython gives every function its own output collector, and only the
+  module's was read. So `def main(): print(42)` printed nothing, and the model
+  was then told to "use print()". All scopes now share one collector, in
+  execution order.
+- **Programs ending in `if __name__ == "__main__":` run.** RestrictedPython
+  rejects the name `__name__`, so "run it" on a complete generated program was
+  a compile error. The sandbox is the main program, so the guard's body now
+  runs; `__name__` itself stays off-limits.
+- "Run it" on code that calls `eval()`/`exec()` or reads internals like
+  `__dict__` (the typical generated calculator) gets a clear "can't run this
+  here" answer with the command to run it locally. Before, the model retried,
+  failed and replied with an unrelated request for clarification.
 - `web_fetch` stops downloading at its 2 MB cap. Before, it read the whole
   response into memory first, so a link to a multi-gigabyte file could exhaust
   memory. PDFs, images, archives and other binary files are now refused with a
