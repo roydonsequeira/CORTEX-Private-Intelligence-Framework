@@ -26,7 +26,27 @@ _USER_AGENT = (
     "+https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework)"
 )
 _ROBOTS_AGENT = "CORTEX"
+_MAX_ROBOTS_BYTES = 512 * 1024
 _MAX_REDIRECTS = 5
+# Media types that are never readable text; they are not downloaded at all.
+_BINARY_TYPES = (
+    "image/",
+    "audio/",
+    "video/",
+    "font/",
+    "application/octet-stream",
+    "application/pdf",
+    "application/zip",
+    "application/gzip",
+    "application/x-gzip",
+    "application/x-tar",
+    "application/x-7z-compressed",
+    "application/vnd.rar",
+    "application/x-rar-compressed",
+    "application/msword",
+    "application/vnd.ms-",
+    "application/vnd.openxmlformats-",
+)
 _tracer = get_tracer(__name__)
 
 
@@ -127,17 +147,25 @@ class WebFetchTool(BaseTool):
                     return _result(False, "", start, _PRIVATE_HOST_ERROR.format(host=parsed.hostname))
                 if not await self._allowed_by_robots(url):
                     return _result(False, "", start, "Blocked by the site's robots.txt.")
-                response = await self._fetch(url)
-                if response is None:
+                fetched = await self._fetch(url)
+                if fetched is None:
                     return _result(False, "", start, _PRIVATE_HOST_ERROR.format(host="a redirect target"))
+                response, body = fetched
                 span.set_attribute("http.response.status_code", response.status_code)
             if response.status_code >= 400:
                 return _result(
                     False, "", start, f"HTTP {response.status_code} fetching {url}."
                 )
-            body = response.content[:_MAX_DOWNLOAD_BYTES]
-            raw = body.decode(response.encoding or "utf-8", errors="replace")
             content_type = response.headers.get("content-type", "")
+            if _is_binary(content_type):
+                media = content_type.split(";")[0].strip()
+                return _result(
+                    False,
+                    "",
+                    start,
+                    f"{url} is a {media} file, not a web page; web_fetch reads HTML and text only.",
+                )
+            raw = body.decode(response.encoding or "utf-8", errors="replace")
             if "html" in content_type or raw.lstrip()[:1] == "<":
                 # HTML conversion of a large page is CPU-bound: keep it off the event loop.
                 convert = _to_markdown if output_format == "markdown" else _strip_html
@@ -164,18 +192,37 @@ class WebFetchTool(BaseTool):
         except httpx.HTTPError as exc:
             return _result(False, "", start, f"Request to {parsed.netloc} failed: {exc}")
 
-    async def _fetch(self, url: str) -> httpx.Response | None:
+    async def _fetch(self, url: str) -> tuple[httpx.Response, bytes] | None:
         """GET url, following redirects only to public hosts (None if one is not)."""
-        response = await self._client.get(url, headers={"User-Agent": _USER_AGENT})
+        response, body = await self._get(url, _MAX_DOWNLOAD_BYTES)
         for _ in range(_MAX_REDIRECTS):
             location = response.headers.get("location")
             if not response.is_redirect or not location:
-                return response
+                return response, body
             url = urljoin(url, location)
             if not await _is_public_host(urlparse(url).hostname or ""):
                 return None
-            response = await self._client.get(url, headers={"User-Agent": _USER_AGENT})
-        return response
+            response, body = await self._get(url, _MAX_DOWNLOAD_BYTES)
+        return response, body
+
+    async def _get(self, url: str, limit: int) -> tuple[httpx.Response, bytes]:
+        """GET url and read at most ``limit`` bytes of its body.
+
+        The rest is never downloaded: a link to a multi-gigabyte file must not
+        fill memory before the size cap applies (a plain GET reads the whole
+        body first). Redirects and binary media are not read at all.
+        """
+        async with self._client.stream(
+            "GET", url, headers={"User-Agent": _USER_AGENT}
+        ) as response:
+            if response.is_redirect or _is_binary(response.headers.get("content-type", "")):
+                return response, b""
+            body = bytearray()
+            async for chunk in response.aiter_bytes():
+                body.extend(chunk)
+                if len(body) >= limit:
+                    break
+            return response, bytes(body[:limit])
 
     async def _allowed_by_robots(self, url: str) -> bool:
         """Return whether url is allowed for CORTEX according to robots.txt."""
@@ -183,12 +230,10 @@ class WebFetchTool(BaseTool):
         robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
         parser = robotparser.RobotFileParser()
         try:
-            response = await self._client.get(
-                robots_url, headers={"User-Agent": _USER_AGENT}
-            )
+            response, body = await self._get(robots_url, _MAX_ROBOTS_BYTES)
             if response.status_code >= 400:
                 return True
-            parser.parse(response.text.splitlines())
+            parser.parse(body.decode("utf-8", errors="replace").splitlines())
             return parser.can_fetch(_ROBOTS_AGENT, url)
         except httpx.HTTPError:
             return True
@@ -196,6 +241,12 @@ class WebFetchTool(BaseTool):
     async def aclose(self) -> None:
         """Close the underlying HTTP client."""
         await self._client.aclose()
+
+
+def _is_binary(content_type: str) -> bool:
+    """True for media types that are never readable text (images, archives, PDFs...)."""
+    media = content_type.split(";")[0].strip().lower()
+    return media.startswith(_BINARY_TYPES)
 
 
 def _normalise_url(url: str) -> str:

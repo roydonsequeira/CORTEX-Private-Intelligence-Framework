@@ -29,6 +29,10 @@ htmlcov/
 # CORTEX runtime data
 .cortex/
 
+# The agent's files; workspace/README.md explains the folder.
+workspace/*
+!workspace/README.md
+
 # Docker volumes
 infra/ollama_data/
 infra/chroma_data/

@@ -1,8 +1,9 @@
 """Unit tests for tool registry and built-in tools."""
 
 import textwrap
+from collections.abc import AsyncIterator
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -12,6 +13,18 @@ from cortex.tools.builtin.code_exec import CodeExecutionTool
 from cortex.tools.builtin.filesystem import FileSystemTool
 from cortex.tools.builtin.web_fetch import WebFetchTool
 from cortex.tools.registry import ToolRegistry
+
+
+def _web_tool(responses: dict[str, httpx.Response]) -> tuple[WebFetchTool, list[str]]:
+    """A WebFetchTool whose HTTP client serves ``responses`` by URL path (404 otherwise)."""
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(request.url.path)
+        return responses.get(request.url.path, httpx.Response(404))
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return WebFetchTool(client=client), requested
 
 
 @pytest.mark.asyncio
@@ -78,16 +91,11 @@ async def test_code_execution_tool_timeout() -> None:
 @pytest.mark.asyncio
 async def test_web_fetch_tool_converts_html_to_markdown() -> None:
     """WebFetchTool converts HTML to readable markdown."""
-    tool = WebFetchTool()
-    request = httpx.Request("GET", "https://example.com/page")
-    robots = httpx.Response(404, text="", request=request)
-    html = httpx.Response(
-        200,
-        text="<html><body><h1>Hello</h1><p>World</p></body></html>",
-        request=request,
+    html = "<html><body><h1>Hello</h1><p>World</p></body></html>"
+    tool, _ = _web_tool(
+        {"/page": httpx.Response(200, text=html, headers={"content-type": "text/html"})}
     )
-    with patch.object(tool._client, "get", new=AsyncMock(side_effect=[robots, html])):
-        result = await tool.execute(url="https://example.com/page", format="markdown")
+    result = await tool.execute(url="https://example.com/page", format="markdown")
     await tool.aclose()
     assert result.success is True
     assert "# Hello" in result.output
@@ -222,6 +230,58 @@ async def test_filesystem_refuses_writes_to_hidden_paths(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+async def test_filesystem_never_reads_or_lists_hidden_paths(tmp_path: Path) -> None:
+    """.env and .git are refused for reading and listing too, not only writing."""
+    (tmp_path / ".env").write_text("TOKEN=secret", encoding="utf-8")
+    (tmp_path / ".git").mkdir()
+    tool = FileSystemTool(allowed_root=tmp_path)
+    for action, raw in (("read_file", ".env"), ("list_directory", ".git"), ("file_exists", ".env")):
+        result = await tool.execute(action=action, path=raw)
+        assert result.success is False, raw
+        assert "hidden" in (result.error or ""), raw
+        assert "secret" not in result.output
+
+
+@pytest.mark.asyncio
+async def test_filesystem_refuses_writes_into_cortex_code(tmp_path: Path) -> None:
+    """With the workspace widened over CORTEX itself, its code and plugins stay read-only."""
+    plugins = tmp_path / "plugins"
+    plugins.mkdir()
+    tool = FileSystemTool(allowed_root=tmp_path, protected_dirs=[plugins])
+    result = await tool.execute(action="write_file", path="plugins/helper.py", content="x = 1")
+    assert result.success is False
+    assert "CORTEX's own code or plugins folder" in (result.error or "")
+    assert not (plugins / "helper.py").exists()
+    ok = await tool.execute(action="write_file", path="notes.py", content="x = 1")
+    assert ok.success is True
+
+
+def test_filesystem_from_settings_protects_the_package_and_plugins(tmp_path: Path) -> None:
+    """from_settings protects the installed cortex package and the plugins folder."""
+    from cortex.config.settings import Settings
+
+    settings = Settings(allowed_root=tmp_path, plugins_dir=tmp_path / "plugins")
+    tool = FileSystemTool.from_settings(settings)
+    protected = {str(path) for path in tool._protected_dirs}
+    assert str((tmp_path / "plugins").resolve()) in protected
+    assert any(path.name == "cortex" and (path / "cli.py").exists() for path in tool._protected_dirs)
+
+
+@pytest.mark.asyncio
+async def test_doc_search_never_indexes_hidden_or_outside_files(tmp_path: Path) -> None:
+    """Indexing hands content to the model, so it follows the file tool's rules."""
+    from cortex.tools.builtin.doc_search import DocumentSearchTool
+
+    (tmp_path / ".env").write_text("TOKEN=secret", encoding="utf-8")
+    tool = DocumentSearchTool(_FakeSemanticMemory(), allowed_root=tmp_path)  # type: ignore[arg-type]
+    hidden = await tool.execute(action="index_document", path=".env")
+    assert hidden.success is False
+    assert "hidden" in (hidden.error or "")
+    outside = await tool.execute(action="index_document", path=str(tmp_path.parent / "x.md"))
+    assert outside.success is False
+
+
+@pytest.mark.asyncio
 async def test_filesystem_missing_file_is_a_clean_error(tmp_path: Path) -> None:
     """A missing file yields a failed result, not an exception."""
     tool = FileSystemTool(allowed_root=tmp_path)
@@ -233,15 +293,46 @@ async def test_filesystem_missing_file_is_a_clean_error(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_web_fetch_reports_http_errors_accurately() -> None:
     """A 404 is reported as an HTTP error, not as 'offline mode'."""
-    tool = WebFetchTool()
-    request = httpx.Request("GET", "https://example.com/missing")
-    robots = httpx.Response(404, text="", request=request)
-    missing = httpx.Response(404, text="nope", request=request)
-    with patch.object(tool._client, "get", new=AsyncMock(side_effect=[robots, missing])):
-        result = await tool.execute(url="example.com/missing")
+    tool, _ = _web_tool({})
+    result = await tool.execute(url="example.com/missing")
     await tool.aclose()
     assert result.success is False
     assert "HTTP 404" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_stops_reading_at_the_download_cap() -> None:
+    """A huge response is cut at the cap while downloading, not after reading it all."""
+    from cortex.tools.builtin import web_fetch
+
+    produced = 0
+
+    async def endless() -> AsyncIterator[bytes]:
+        nonlocal produced
+        for _ in range(10_000):  # up to 640 MB if it were read to the end
+            produced += 65_536
+            yield b"a" * 65_536
+
+    tool, _ = _web_tool(
+        {"/big": httpx.Response(200, content=endless(), headers={"content-type": "text/plain"})}
+    )
+    result = await tool.execute(url="https://example.com/big")
+    await tool.aclose()
+    assert result.success is True
+    assert result.output.endswith("[content truncated]")
+    assert produced <= web_fetch._MAX_DOWNLOAD_BYTES + 65_536
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_refuses_binary_files_without_downloading() -> None:
+    """A PDF or image link gets a clear message instead of decoded garbage."""
+    tool, _ = _web_tool(
+        {"/paper.pdf": httpx.Response(200, content=b"%PDF-1.7", headers={"content-type": "application/pdf"})}
+    )
+    result = await tool.execute(url="https://example.com/paper.pdf")
+    await tool.aclose()
+    assert result.success is False
+    assert "application/pdf file, not a web page" in (result.error or "")
 
 
 @pytest.mark.asyncio
@@ -420,28 +511,24 @@ def test_escape_repair_leaves_valid_code_alone() -> None:
 )
 async def test_web_fetch_refuses_local_and_private_hosts(url: str) -> None:
     """web_fetch cannot be turned against this machine or the local network (SSRF)."""
-    tool = WebFetchTool()
-    get = AsyncMock()
-    with patch.object(tool._client, "get", new=get):
-        result = await tool.execute(url=url)
+    tool, requested = _web_tool({})
+    result = await tool.execute(url=url)
     await tool.aclose()
     assert result.success is False
     assert "local or private network" in (result.error or "")
-    get.assert_not_awaited()
+    assert requested == []
 
 
 @pytest.mark.asyncio
 async def test_web_fetch_refuses_redirect_to_a_private_host() -> None:
     """A public page that redirects to localhost is not followed."""
-    tool = WebFetchTool()
-    request = httpx.Request("GET", "https://93.184.215.14/page")
-    robots = httpx.Response(404, text="", request=request)
-    redirect = httpx.Response(302, headers={"location": "http://127.0.0.1:8000/"}, request=request)
-    with patch.object(tool._client, "get", new=AsyncMock(side_effect=[robots, redirect])):
-        result = await tool.execute(url="https://93.184.215.14/page")
+    redirect = httpx.Response(302, headers={"location": "http://127.0.0.1:8000/"})
+    tool, requested = _web_tool({"/page": redirect})
+    result = await tool.execute(url="https://93.184.215.14/page")
     await tool.aclose()
     assert result.success is False
     assert "redirect target" in (result.error or "")
+    assert requested == ["/robots.txt", "/page"]
 
 
 def test_filesystem_infers_a_missing_action() -> None:

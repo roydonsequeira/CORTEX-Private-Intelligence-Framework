@@ -12,6 +12,7 @@ code_model: qwen2.5:7b
 embed_model: nomic-embed-text
 
 # --- Storage (created on first run; wipe with `cortex reset-memory --yes`) --
+# Relative paths in this file are relative to this file's folder.
 chroma_path: ./.cortex/chroma
 db_path: ./.cortex/cortex.db
 
@@ -30,7 +31,10 @@ otel_endpoint: http://localhost:4317
 # --- Agent and tools ----------------------------------------------------------
 max_agent_steps: 10
 plugins_dir: ./src/cortex/tools/plugins
-allowed_root: .
+# The only folder the agent can read and write (created on start). Keep it
+# separate from this project: the agent must not reach cortex.yaml or CORTEX's
+# own code. Hidden files (.env, .git, ...) are off-limits wherever it points.
+allowed_root: ./workspace
 allowed_write_extensions:
   - .txt
   - .md

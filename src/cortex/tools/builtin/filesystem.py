@@ -8,7 +8,12 @@ import anyio
 
 from cortex.config.settings import Settings
 from cortex.tools.base import BaseTool, ToolResult, ToolSchema
-from cortex.tools.workspace import check_readable_file, ensure_text, resolve_workspace_path
+from cortex.tools.workspace import (
+    check_readable_file,
+    ensure_not_hidden,
+    ensure_text,
+    resolve_workspace_path,
+)
 
 _MAX_WRITE_BYTES = 524_288
 
@@ -61,16 +66,28 @@ class FileSystemTool(BaseTool):
         self,
         allowed_root: str | Path = ".",
         allowed_extensions: list[str] | None = None,
+        protected_dirs: list[str | Path] | None = None,
     ) -> None:
         self._allowed_root = Path(allowed_root).resolve()
         self._allowed_extensions = set(
             allowed_extensions or [".txt", ".md", ".json", ".csv", ".py"]
         )
+        self._protected_dirs = [Path(p).resolve() for p in protected_dirs or []]
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "FileSystemTool":
-        """Create a FileSystemTool from CORTEX settings."""
-        return cls(settings.allowed_root, settings.allowed_write_extensions)
+        """Create a FileSystemTool from CORTEX settings.
+
+        CORTEX's own package and the plugins folder are write-protected even when
+        the workspace root is widened to contain them: a .py file written there
+        would run, unsandboxed, the next time CORTEX starts.
+        """
+        package_dir = Path(__file__).resolve().parents[2]
+        return cls(
+            settings.allowed_root,
+            settings.allowed_write_extensions,
+            protected_dirs=[settings.plugins_dir, package_dir],
+        )
 
     async def execute(self, **kwargs: object) -> ToolResult:
         """Execute a filesystem action with path validation at point of use."""
@@ -78,6 +95,7 @@ class FileSystemTool(BaseTool):
         action = infer_action(kwargs)
         try:
             path = self._resolve_path(str(kwargs["path"]))
+            ensure_not_hidden(self._allowed_root, path)
             if action == "read_file":
                 output = await self._read_file(path)
             elif action == "write_file":
@@ -110,14 +128,18 @@ class FileSystemTool(BaseTool):
     async def _write_file(self, path: Path, content: str, overwrite: bool = False) -> str:
         """Write UTF-8 content to an allowed extension under the allowed root.
 
-        Existing files are never replaced unless ``overwrite`` is set, and hidden
-        paths (.git, .venv, .env, the .cortex data dir) are never written. This
-        keeps a manipulated or confused model from clobbering the workspace — a
-        "delete everything" prompt cannot turn into "overwrite everything".
+        Existing files are never replaced unless ``overwrite`` is set, hidden paths
+        are refused for every action (see execute), and CORTEX's own code and
+        plugins folder are never written. This keeps a manipulated or confused
+        model from clobbering the workspace — a "delete everything" prompt cannot
+        turn into "overwrite everything".
         """
         relative = path.relative_to(self._allowed_root)
-        if any(part.startswith(".") for part in relative.parts):
-            raise OSError(f"Writing to hidden paths is not allowed: {relative}")
+        if any(path.is_relative_to(protected) for protected in self._protected_dirs):
+            raise OSError(
+                f"Access denied: {relative} is inside CORTEX's own code or plugins "
+                "folder, which the agent cannot modify."
+            )
         if path.exists() and not overwrite:
             raise OSError(
                 f"{relative} already exists. It was not changed. Only set overwrite=true "
