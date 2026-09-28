@@ -5,7 +5,7 @@
 **A private AI agent that runs entirely on your own machine** — it plans, uses sandboxed tools, remembers you across sessions, and streams every step live, on a laptop GPU with 6 GB of VRAM. No cloud, no API keys, nothing leaves your computer.
 
 [![CI](https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/actions/workflows/ci.yml/badge.svg)](https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/actions/workflows/ci.yml)
-![Tests](https://img.shields.io/badge/tests-255%20unit%20%2B%20187%20live-brightgreen)
+![Tests](https://img.shields.io/badge/tests-256%20unit%20%2B%20187%20live-brightgreen)
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Docker](https://img.shields.io/badge/Docker-Compose-blue)
@@ -278,7 +278,7 @@ See [DEMO.md](DEMO.md) for reproducible examples.
 ## Testing
 
 ```bash
-pytest                 # 255 unit and integration tests (the model is mocked)
+pytest                 # 256 unit and integration tests (the model is mocked)
 pytest -m ollama       # live tests against a running Ollama
 ruff check src tests && mypy src tests   # lint and strict type checking
 ```
