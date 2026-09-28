@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 
@@ -28,17 +28,30 @@ const EXAMPLES = [
 export function AgentOutput({ events, isStreaming, onRun }: AgentOutputProps) {
   const turns = groupTurns(events);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Follow new output only while the reader is at the bottom: scrolling up to
+  // read an earlier answer must not be undone by every streamed token.
+  const followRef = useRef(true);
 
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) {
+    if (events[events.length - 1]?.type === "user") {
+      followRef.current = true;
+    }
+    if (el && followRef.current) {
       el.scrollTop = el.scrollHeight;
     }
   }, [events]);
 
   return (
     <main className="flex min-h-0 flex-1 flex-col bg-ground">
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+      <div
+        ref={scrollRef}
+        onScroll={(event) => {
+          const el = event.currentTarget;
+          followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        }}
+        className="flex-1 overflow-y-auto"
+      >
         <div className="mx-auto max-w-3xl px-6 py-8">
           {turns.length === 0 ? (
             <EmptyState onRun={onRun} />
@@ -67,6 +80,16 @@ const MARKDOWN_FENCE = /```(?:markdown|md)[ \t]*\n([\s\S]*?)```/g;
 function unwrapMarkdownFences(text: string): string {
   return text.replace(MARKDOWN_FENCE, (_match, inner: string) => inner);
 }
+
+// Links open in a new tab: following one in place would unload the page and
+// lose the conversation, which lives only in this tab.
+const MARKDOWN_COMPONENTS: Components = {
+  a: ({ href, title, children }) => (
+    <a href={href} title={title} target="_blank" rel="noopener noreferrer">
+      {children}
+    </a>
+  )
+};
 
 function TurnBlock({ turn, streaming }: { turn: Turn; streaming: boolean }) {
   const plan = turn.events.find((e) => e.type === "plan") as
@@ -129,7 +152,11 @@ function TurnBlock({ turn, streaming }: { turn: Turn; streaming: boolean }) {
 
       {answer ? (
         <div className="settle answer rounded-card border border-line bg-panel px-5 py-4 text-[15px] leading-relaxed text-ink">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={[rehypeHighlight]}
+            components={MARKDOWN_COMPONENTS}
+          >
             {unwrapMarkdownFences(answer)}
           </ReactMarkdown>
           {streaming ? <span className="caret" aria-hidden /> : null}
