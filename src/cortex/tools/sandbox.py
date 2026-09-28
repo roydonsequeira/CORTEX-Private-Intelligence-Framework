@@ -245,9 +245,7 @@ def _run_code(code: str, allowed_root: str | None = None) -> str:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", SyntaxWarning)
         try:
-            byte_code = compile_restricted(
-                _capture_last_expression(code), "<cortex-python-exec>", "exec"
-            )
+            byte_code = compile_restricted(_prepare(code), "<cortex-python-exec>", "exec")
         except SyntaxError as exc:
             # RestrictedPython packs its policy violations into a tuple of lines.
             detail = exc.args[0] if exc.args else exc
@@ -272,33 +270,99 @@ def _run_code(code: str, allowed_root: str | None = None) -> str:
     return output or _NO_OUTPUT_MESSAGE
 
 
-def _capture_last_expression(code: str) -> str | ast.Module:
-    """Rewrite a trailing bare expression into an assignment the runner can read.
+def _prepare(code: str) -> str | ast.Module:
+    """Parse the snippet once and apply the rewrites below before compiling.
 
-    ``print(...)`` calls are left alone (their value is always None). Code that
-    does not parse is returned unchanged so RestrictedPython reports the error.
+    Code that does not parse is returned unchanged so RestrictedPython reports
+    the error.
     """
     try:
         tree = ast.parse(code)
     except SyntaxError:
         return code
+    rewritten: ast.Module = _ItemAugAssign().visit(tree)
+    _capture_last_expression(rewritten)
+    ast.fix_missing_locations(rewritten)
+    return rewritten
+
+
+class _ItemAugAssign(ast.NodeTransformer):
+    """Rewrite ``d[k] += v`` and ``obj.attr += v`` as a read, an update and a write.
+
+    RestrictedPython refuses augmented assignment to items and attributes at
+    compile time, so the everyday counting idiom ``counts[word] += 1`` failed,
+    and the model then stated a result it never computed (live case C18). As in
+    Python, the container and key are evaluated once; the rewritten read and
+    write go through the same guards as any other item or attribute access.
+    Slices (``xs[1:3] += ...``) are left for RestrictedPython to refuse.
+    """
+
+    def __init__(self) -> None:
+        self._count = 0
+
+    def _temp(self) -> str:
+        self._count += 1
+        return f"cortex_aug_{self._count}"
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST | list[ast.stmt]:
+        target = node.target
+        if isinstance(target, ast.Subscript) and not isinstance(target.slice, ast.Slice):
+            holder, key, current = self._temp(), self._temp(), self._temp()
+            statements: list[ast.stmt] = [
+                _bind(holder, target.value),
+                _bind(key, target.slice),
+                _bind(current, ast.Subscript(value=_name(holder), slice=_name(key), ctx=ast.Load())),
+                ast.AugAssign(target=_name(current, ast.Store()), op=node.op, value=node.value),
+                ast.Assign(
+                    targets=[ast.Subscript(value=_name(holder), slice=_name(key), ctx=ast.Store())],
+                    value=_name(current),
+                ),
+            ]
+        elif isinstance(target, ast.Attribute):
+            holder, current = self._temp(), self._temp()
+            statements = [
+                _bind(holder, target.value),
+                _bind(current, ast.Attribute(value=_name(holder), attr=target.attr, ctx=ast.Load())),
+                ast.AugAssign(target=_name(current, ast.Store()), op=node.op, value=node.value),
+                ast.Assign(
+                    targets=[ast.Attribute(value=_name(holder), attr=target.attr, ctx=ast.Store())],
+                    value=_name(current),
+                ),
+            ]
+        else:
+            return node
+        return [ast.copy_location(statement, node) for statement in statements]
+
+
+def _name(identifier: str, ctx: ast.expr_context | None = None) -> ast.Name:
+    return ast.Name(id=identifier, ctx=ctx or ast.Load())
+
+
+def _bind(identifier: str, value: ast.expr) -> ast.Assign:
+    return ast.Assign(targets=[_name(identifier, ast.Store())], value=value)
+
+
+def _capture_last_expression(tree: ast.Module) -> None:
+    """Rewrite a trailing bare expression into an assignment the runner can read.
+
+    ``print(...)`` calls are left alone (their value is always None).
+    """
     if tree.body and isinstance(tree.body[-1], ast.Assign | ast.AugAssign):
         target = _single_name_target(tree.body[-1])
         if target is None:
-            return code
+            return
         capture = ast.parse(f"{_REPL_ASSIGNED_NAME} = ({target!r}, {target})").body[0]
         tree.body.append(ast.copy_location(capture, tree.body[-1]))
-        ast.fix_missing_locations(tree)
-        return tree
+        return
     if not tree.body or not isinstance(tree.body[-1], ast.Expr):
-        return code
+        return
     last = tree.body[-1]
     if (
         isinstance(last.value, ast.Call)
         and isinstance(last.value.func, ast.Name)
         and last.value.func.id == "print"
     ):
-        return code
+        return
     tree.body[-1] = ast.copy_location(
         ast.Assign(
             targets=[ast.Name(id=_REPL_VALUE_NAME, ctx=ast.Store())],
@@ -306,8 +370,6 @@ def _capture_last_expression(code: str) -> str | ast.Module:
         ),
         last,
     )
-    ast.fix_missing_locations(tree)
-    return tree
 
 
 def _single_name_target(statement: ast.stmt) -> str | None:
