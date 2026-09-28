@@ -246,6 +246,95 @@ def test_trailing_assignment_is_reported_when_nothing_printed() -> None:
     assert _run_code("print(1)\ny = 3") == "1"  # printed output wins
 
 
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("def main():\n    print(42)\nmain()", "42"),
+        ("print(1)\ndef f():\n    print(2)\nf()\nprint(3)", "1\n2\n3"),
+        ("class A:\n    def show(self):\n        print('in method')\nA().show()", "in method"),
+        (
+            "def fact(n):\n    print('n =', n)\n    return 1 if n <= 1 else n * fact(n - 1)\n"
+            "print(fact(3))",
+            "n = 3\nn = 2\nn = 1\n6",
+        ),
+    ],
+)
+def test_print_inside_functions_is_collected_in_order(code: str, expected: str) -> None:
+    """print() in a function or method used to be dropped: each scope had its own collector."""
+    from cortex.tools.sandbox import _run_code
+
+    assert _run_code(code) == expected
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        'def main():\n    print(42)\n\nif __name__ == "__main__":\n    main()',
+        'def main():\n    print(42)\n\nif "__main__" == __name__:\n    main()',
+    ],
+)
+def test_main_guard_programs_run(code: str) -> None:
+    """Generated programs end with a main guard; the sandbox is the main program."""
+    from cortex.tools.sandbox import _run_code
+
+    assert _run_code(code) == "42"
+
+
+def test_other_uses_of_dunder_name_stay_refused() -> None:
+    """Only the exact main guard is rewritten; __name__ itself is still off-limits."""
+    from cortex.tools.sandbox import _run_code
+
+    with pytest.raises(SyntaxError):
+        _run_code("print(__name__)")
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        # Live case C18: the counting idiom used to be a compile error.
+        (
+            "counts = {}\nfor w in 'a b a c a'.split():\n"
+            "    counts[w] = counts.get(w, 0)\n    counts[w] += 1\nprint(counts)",
+            "{'a': 3, 'b': 1, 'c': 1}",
+        ),
+        ("xs = [1, 2]\nxs[0] += 10\nxs[-1] *= 3\nprint(xs)", "[11, 6]"),
+        ("grid = [[0, 0]]\ngrid[0][1] += 5\nprint(grid)", "[[0, 5]]"),
+        ("d = {'k': 'a'}\nd['k'] += 'b'\nprint(d['k'])", "ab"),
+        ("class C:\n    n = 1\nc = C()\nc.n += 4\nprint(c.n)", "5"),
+        (
+            "def tally(words):\n    seen = {}\n    for w in words:\n"
+            "        seen.setdefault(w, 0)\n        seen[w] += 1\n    return seen\n"
+            "print(tally(['x', 'x']))",
+            "{'x': 2}",
+        ),
+    ],
+)
+def test_augmented_assignment_to_items_and_attributes(code: str, expected: str) -> None:
+    """`d[k] += 1`, `xs[i] *= 3` and `obj.n += 1` work as in Python."""
+    from cortex.tools.sandbox import _run_code
+
+    assert _run_code(code) == expected
+
+
+def test_augmented_item_assignment_evaluates_the_key_once() -> None:
+    """Like Python, the container and key expressions run once, not twice."""
+    from cortex.tools.sandbox import _run_code
+
+    code = (
+        "calls = []\ndef key():\n    calls.append(1)\n    return 'k'\n"
+        "d = {'k': 1}\nd[key()] += 1\nprint(d['k'], len(calls))"
+    )
+    assert _run_code(code) == "2 1"
+
+
+def test_augmented_assignment_keeps_private_attributes_blocked() -> None:
+    """The rewrite changes no policy: underscore attributes stay refused."""
+    from cortex.tools.sandbox import _run_code
+
+    with pytest.raises(SyntaxError):
+        _run_code("class C:\n    pass\nc = C()\nc._n += 1")
+
+
 # --- read-only workspace open() ----------------------------------------------
 
 

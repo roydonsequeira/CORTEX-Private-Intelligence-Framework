@@ -12,6 +12,12 @@ import anyio
 from cortex.memory.base import MemoryEntry, MemoryQuery
 from cortex.memory.semantic import SemanticMemory
 from cortex.tools.base import BaseTool, ToolResult, ToolSchema
+from cortex.tools.workspace import (
+    check_readable_file,
+    ensure_not_hidden,
+    ensure_text,
+    resolve_workspace_path,
+)
 
 
 class DocumentSearchTool(BaseTool):
@@ -123,17 +129,16 @@ class DocumentSearchTool(BaseTool):
         ]
 
     def _resolve(self, path: str) -> Path:
-        """Resolve a document path, confined to the allowed root when one is set."""
-        candidate = Path(path.strip())
+        """Resolve a document path under the filesystem tool's workspace rules.
+
+        Same rules as reading a file (no "..", no absolute paths, symlinks
+        resolved inside the root) and hidden files such as .env are never
+        indexed, since indexing hands their content to the model.
+        """
         if self._allowed_root is None:
-            return candidate
-        resolved = (
-            candidate.resolve()
-            if candidate.is_absolute()
-            else (self._allowed_root / candidate).resolve()
-        )
-        if not resolved.is_relative_to(self._allowed_root):
-            raise OSError("Only documents inside the CORTEX workspace can be indexed.")
+            return Path(path.strip())
+        resolved = resolve_workspace_path(self._allowed_root, path)
+        ensure_not_hidden(self._allowed_root, resolved)
         return resolved
 
     async def index_document(
@@ -147,7 +152,12 @@ class DocumentSearchTool(BaseTool):
         doc_path = self._resolve(path)
         if not doc_path.is_file():
             raise OSError(f"Document not found: {path}")
-        content = (await anyio.Path(doc_path).read_bytes()).decode("utf-8", errors="replace")
+        # 1 MB and text only, like read_file: a large or binary file would be
+        # split into thousands of chunks, each one an embedding call.
+        check_readable_file(doc_path, path)
+        raw = await anyio.Path(doc_path).read_bytes()
+        ensure_text(raw, path)
+        content = raw.decode("utf-8", errors="replace")
         chunks = _chunk_document(content, chunk_size=chunk_size, overlap=overlap)
         path_key = hashlib.sha1(str(doc_path).encode("utf-8")).hexdigest()[:16]
         for idx, chunk in enumerate(chunks):

@@ -29,6 +29,10 @@ htmlcov/
 # CORTEX runtime data
 .cortex/
 
+# The agent's files; workspace/README.md explains the folder.
+workspace/*
+!workspace/README.md
+
 # Docker volumes
 infra/ollama_data/
 infra/chroma_data/
@@ -56,3 +60,6 @@ desktop.ini
 .claude/
 *.swp
 *.swo
+
+# Live battery results (written on every run; see evals/live_battery/README.md)
+evals/live_battery/*.jsonl

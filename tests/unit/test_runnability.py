@@ -1,7 +1,9 @@
 """Tests for detecting 'run it' requests on code the sandbox cannot run."""
 
+import pytest
+
 from cortex.agent.planner import _tidy_steps
-from cortex.agent.runnability import cannot_run_reply
+from cortex.agent.runnability import cannot_run_reply, refused_user_code_reply
 from cortex.models.provider import Message
 
 _SNAKE = """Here is a snake game:
@@ -96,6 +98,78 @@ def test_blocked_stdlib_module_is_named() -> None:
 
     assert reply is not None
     assert "`os`" in reply
+
+
+def test_refused_user_code_gets_a_plain_answer() -> None:
+    """Live I05: the sandbox's refusal of the user's own code is the answer."""
+    reply = refused_user_code_reply(
+        "import subprocess; subprocess.run(['dir'])",
+        "ImportError: import of 'subprocess' is not permitted in the sandbox",
+        "Run this Python: import subprocess; subprocess.run(['dir'])",
+    )
+
+    assert reply is not None
+    assert reply.startswith(
+        "The sandbox refused to run this code: import of 'subprocess' is not permitted"
+    )
+
+
+def test_refused_code_matching_ignores_formatting() -> None:
+    """The model may split `a; b` over lines or switch quote style."""
+    reply = refused_user_code_reply(
+        'import subprocess\nprint(subprocess.run(["dir"]))',
+        "ImportError: import of 'subprocess' is not permitted in the sandbox",
+        "Run this Python: import subprocess; print(subprocess.run(['dir']))",
+    )
+
+    assert reply is not None
+
+
+@pytest.mark.parametrize(
+    ("code", "error", "request_text"),
+    [
+        # The model's own code: it may fix it or use another tool.
+        (
+            "import os\nprint(os.listdir('.'))",
+            "ImportError: import of 'os' is not permitted in the sandbox",
+            "Use Python to list the files here",
+        ),
+        # An ordinary bug, not a refusal.
+        ("print(1 / 0)", "ZeroDivisionError: division by zero", "Run this Python: print(1 / 0)"),
+    ],
+)
+def test_model_code_and_ordinary_errors_go_back_to_the_model(
+    code: str, error: str, request_text: str
+) -> None:
+    assert refused_user_code_reply(code, error, request_text) is None
+
+
+def test_eval_calculator_run_request_is_explained() -> None:
+    """Live: a calculator built on eval(..., math.__dict__) got a confused answer."""
+    code = (
+        "```python\nimport math\n\ndef calculator(expression):\n"
+        '    return eval(expression, {"__builtins__": None}, math.__dict__)\n```'
+    )
+    reply = cannot_run_reply("run it", _history(code))
+
+    assert reply is not None
+    assert "`eval()`" in reply
+    assert "`__dict__`" in reply
+    assert "python program.py" in reply
+
+
+def test_eval_in_a_comment_or_string_is_not_a_blocker() -> None:
+    """Only real calls count: code that mentions eval() still goes to the model."""
+    code = "```python\n# avoid eval() here\nprint('eval() is unsafe')\n```"
+
+    assert cannot_run_reply("run it", _history(code)) is None
+
+
+def test_main_guard_program_goes_to_the_model() -> None:
+    """The sandbox runs `if __name__ == "__main__":` programs, so they are not refused."""
+    code = '```python\ndef main():\n    print(42)\n\nif __name__ == "__main__":\n    main()\n```'
+
+    assert cannot_run_reply("run it", _history(code)) is None
 
 
 def test_plan_steps_are_cut_before_code_and_capped() -> None:
