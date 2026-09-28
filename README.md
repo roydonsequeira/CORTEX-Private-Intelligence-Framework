@@ -76,7 +76,7 @@ flowchart TB
 
 ## Quick Start
 
-**Prerequisites:** [Ollama](https://ollama.com), Python 3.12+, Node.js 20+ (for the UI). About 6 GB of disk for the default models; a GPU with 6 GB+ VRAM is recommended (CPU works, slowly).
+**Prerequisites:** [Ollama](https://ollama.com), Python 3.12+, Node.js 20.9+ for the UI (24 LTS recommended). About 6 GB of disk for the default models; a GPU with 6 GB+ VRAM is recommended (CPU works, slowly).
 
 ### Native (recommended for development)
 
@@ -126,7 +126,7 @@ Same URLs as above. Answers are weaker than the default 7B model — this shows 
 
 `cortex serve` runs uvicorn inside the environment CORTEX is installed in, so it cannot pick up another Python's `uvicorn` from `PATH` (which fails with `No module named 'cortex'`). It refuses to start on a busy port and warms the model in the background. `cortex doctor` checks the whole setup and prints the fix for anything wrong. `cortex reset-memory --yes` wipes stored memory for a clean start.
 
-Telemetry export is off in the default `cortex.yaml` (no collector is running natively); the Docker stack turns it on for Jaeger.
+Telemetry export is off in the default `cortex.yaml` (no collector is running natively); the Docker stack turns it on for Jaeger. That is CORTEX's own tracing, which stays on your machine. Separately, Next.js sends anonymous usage statistics about its build tooling (never your prompts) to Vercel by default. The UI's Docker image turns this off; for native UI development, run `npx next telemetry disable` once in `ui/`.
 
 ## Configuration
 

@@ -6,7 +6,43 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **UI on Next.js 16, Tailwind CSS 4 and ESLint 9** (flat config). Next.js 15's
+  security support ends on 21 Oct 2026. The Tailwind theme moved from
+  `tailwind.config.ts` into `globals.css`; `npm run lint` runs the ESLint CLI
+  (Next 16 removed `next lint`), and `npm run typecheck` generates Next's route
+  types first. The unused `framer-motion` and `autoprefixer` dependencies are gone.
+- The UI's Docker image and CI job run on Node.js 24 LTS (Node 20 reached end of
+  life in April 2026); the UI needs Node.js 20.9 or newer.
+- `ui/next-env.d.ts` is generated, no longer committed: `next dev` and
+  `next build` wrote different versions, so it always showed as modified.
+- Dependabot groups UI minor and patch updates and opens each major version on
+  its own, except ESLint, TypeScript and `@types/node`, which stay on their
+  current majors for the reasons noted in `dependabot.yml`.
+
 ### Fixed
+
+- **UI colours with an opacity suffix never rendered.** Tailwind 3 can't apply
+  `/30`-style opacity to colours defined as CSS variables, so tool-call, result
+  and error cards showed light-grey default borders with no tint, finished plan
+  steps lost their teal ring, the memory-search overlay didn't dim the page, and its
+  input focused blue. Tailwind 4 mixes these colours, so all of them now show.
+- Markdown tables in answers have borders and cell padding (the columns used to
+  run together), and blockquotes, headings and code colours are styled.
+- Links in answers open in a new tab; following one used to unload the page and
+  lose the conversation.
+- Pressing Enter to confirm a Chinese, Japanese or Korean IME candidate no
+  longer sends a half-typed message.
+- Scrolling up to read an earlier answer is no longer undone by every streamed
+  token; the chat follows new output only while you're at the bottom.
+- The UI says when the API can't be reached ("Is `cortex serve` running?")
+  instead of "Failed to fetch", and reports a stream that stops before the answer
+  finishes instead of silently showing a partial answer.
+- Memory search shows the results for what you typed last (a slow earlier search
+  could overwrite them), no longer flashes "No matches." before results arrive,
+  says when the search itself failed, and shows Ctrl K instead of ⌘K outside
+  macOS. The "sessions in memory" count updates when a new conversation starts.
 
 - **A made-up count from "read a file, then use Python".** Asked to "read
   README.md, then use Python to count" a word, `qwen2.5:7b` wrote
