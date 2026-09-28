@@ -84,6 +84,13 @@ def app() -> FastAPI:
     return app
 
 
+def test_api_version_is_the_package_version(app: FastAPI) -> None:
+    """The version in /docs comes from the installed package, not a copy that drifts."""
+    from importlib.metadata import version
+
+    assert app.version == version("cortex-agent")
+
+
 @pytest.mark.asyncio
 async def test_chat_message_returns_agent_state(app: FastAPI) -> None:
     """POST /chat/message returns a valid AgentState JSON payload."""
