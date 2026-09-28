@@ -513,6 +513,52 @@ async def test_parallel_tool_calls_are_capped_per_step() -> None:
 
 
 @pytest.mark.asyncio
+async def test_refused_user_code_ends_the_run_without_other_tools() -> None:
+    """Live I05/I17: after the sandbox refused the user's code, the model listed files instead."""
+    kernel, router, registry = _make_kernel()
+    user_code = "import subprocess; subprocess.run(['dir'])"
+    registry.execute = AsyncMock(
+        return_value=ToolResult(
+            tool_name="python_exec",
+            success=False,
+            output="",
+            error="ImportError: import of 'subprocess' is not permitted in the sandbox",
+            execution_time_ms=1.0,
+        )
+    )
+    python_then_listing: dict[str, Any] = {
+        "model": "llama3.1:8b",
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"function": {"name": "python_exec", "arguments": {"code": user_code}}},
+                {
+                    "function": {
+                        "name": "filesystem",
+                        "arguments": {"action": "list_directory", "path": "."},
+                    }
+                },
+            ],
+        },
+    }
+    router.complete.side_effect = [
+        _mock_model_response('["Run the code with python_exec"]'),
+        ModelResponse(
+            content="", model="m", input_tokens=1, output_tokens=1, latency_ms=1.0,
+            raw=python_then_listing,
+        ),
+    ]
+
+    state = await kernel.run(f"Run this Python: {user_code}")
+
+    assert state.status == "complete"
+    assert registry.execute.await_count == 1  # the listing never ran
+    assert (state.final_answer or "").startswith("The sandbox refused to run this code")
+    assert router.complete.await_count == 2  # no further model call to work around it
+
+
+@pytest.mark.asyncio
 async def test_duplicate_tool_call_is_not_re_executed() -> None:
     """An identical repeated tool call returns the earlier result instead of re-running."""
     kernel, router, registry = _make_kernel()

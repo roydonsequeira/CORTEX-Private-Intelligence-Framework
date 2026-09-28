@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from cortex.agent.runnability import refused_user_code_reply
 from cortex.exceptions import CortexToolError
 from cortex.models.parsing import strip_reasoning
 from cortex.models.provider import GenerationConfig, Message, ToolCall
@@ -357,6 +358,16 @@ class Executor:
                     content=_tool_message_content(result),
                 )
             )
+            if tool_name == "python_exec" and not result.success:
+                refusal = refused_user_code_reply(
+                    kwargs.get("code"), result.error, state.user_input
+                )
+                if refusal is not None:
+                    # The sandbox refused the user's own code; the kernel ends the
+                    # run with this answer, so later calls in this step (seen: a
+                    # directory listing standing in for a blocked "dir") never run.
+                    state.refusal = refusal
+                    break
 
         state.status = "executing"
         return state
