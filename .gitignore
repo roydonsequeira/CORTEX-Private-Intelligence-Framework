@@ -58,3 +58,6 @@ desktop.ini
 .claude/
 *.swp
 *.swo
+
+# Live battery results (written on every run; see evals/live_battery/README.md)
+evals/live_battery/*.jsonl
