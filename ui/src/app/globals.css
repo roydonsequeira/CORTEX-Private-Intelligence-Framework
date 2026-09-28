@@ -1,6 +1,5 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@plugin "@tailwindcss/forms";
 
 :root {
   /* Deep-ink instrument palette — a private machine that is quietly alive. */
@@ -16,12 +15,48 @@
   --bad: #fb6e7e;
   --think: #e4b667;
   --tool: #6ba8f5;
+}
 
-  /* System stacks only — no network font fetch (works behind proxies/offline). */
-  --font-sans: "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial,
-    sans-serif;
-  --font-mono: ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Menlo,
-    Consolas, monospace;
+/* Utility names for the palette (bg-ground, border-tool/30, …). "inline" makes
+   each utility use var(--x) directly, so opacity modifiers mix the real colour. */
+@theme inline {
+  --color-ground: var(--ground);
+  --color-panel: var(--panel);
+  --color-raised: var(--raised);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-ink-dim: var(--ink-dim);
+  --color-ink-faint: var(--ink-faint);
+  --color-signal: var(--signal);
+  --color-ok: var(--ok);
+  --color-bad: var(--bad);
+  --color-think: var(--think);
+  --color-tool: var(--tool);
+  --radius-card: 10px;
+}
+
+/* System stacks only — no network font fetch (works behind proxies/offline). */
+@theme {
+  --font-sans: "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Menlo, Consolas,
+    monospace;
+}
+
+/* Tailwind 4 changed two defaults this UI relies on: a bare `border` is now
+   currentColor (keep the quiet --line) and buttons lost the pointer cursor. */
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--line);
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
 }
 
 * {

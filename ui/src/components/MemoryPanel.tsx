@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { api } from "@/lib/api";
 import type { MemorySearchResult, ToolSchema } from "@/lib/types";
@@ -9,28 +9,58 @@ interface MemoryPanelProps {
   sessionId: string | null;
 }
 
+interface SearchOutcome {
+  term: string;
+  results: MemorySearchResult[];
+  failed: boolean;
+}
+
 export function MemoryPanel({ sessionId }: MemoryPanelProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<MemorySearchResult[]>([]);
+  const [outcome, setOutcome] = useState<SearchOutcome | null>(null);
   const [sessions, setSessions] = useState<string[]>([]);
   const [tools, setTools] = useState<ToolSchema[]>([]);
 
   useEffect(() => {
-    void api.listSessions().then(setSessions).catch(() => setSessions([]));
     void api.listTools().then(setTools).catch(() => setTools([]));
   }, []);
 
+  // Refreshed when a conversation starts, so a new session is counted.
   useEffect(() => {
-    if (!open || query.trim().length < 2) {
-      setResults([]);
+    void api.listSessions().then(setSessions).catch(() => setSessions([]));
+  }, [sessionId]);
+
+  const term = query.trim();
+  const searching = open && term.length >= 2;
+
+  useEffect(() => {
+    if (!searching) {
       return;
     }
+    // Only the latest search may update the list: a slow earlier request must
+    // not overwrite the results of the query the user typed since.
+    let cancelled = false;
     const timer = window.setTimeout(() => {
-      void api.searchMemory(query).then(setResults).catch(() => setResults([]));
+      api
+        .searchMemory(term)
+        .then((results) => {
+          if (!cancelled) setOutcome({ term, results, failed: false });
+        })
+        .catch(() => {
+          if (!cancelled) setOutcome({ term, results: [], failed: true });
+        });
     }, 300);
-    return () => window.clearTimeout(timer);
-  }, [open, query]);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [searching, term]);
+
+  // Results belong to the term they were fetched for; while a newer search is
+  // pending nothing is shown, so "No matches." never flashes before results.
+  const current = searching && outcome?.term === term ? outcome : null;
+  const results = current?.results ?? [];
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -46,7 +76,12 @@ export function MemoryPanel({ sessionId }: MemoryPanelProps) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const memoryCount = useMemo(() => sessions.length, [sessions.length]);
+  // The shortcut works with Ctrl or Cmd; show the key this keyboard has.
+  const isMac = useSyncExternalStore(
+    subscribeToNothing,
+    () => /Mac|iPhone|iPad/.test(navigator.platform),
+    () => true
+  );
 
   return (
     <aside className="hidden w-[248px] shrink-0 flex-col border-r border-line bg-panel md:flex">
@@ -60,7 +95,7 @@ export function MemoryPanel({ sessionId }: MemoryPanelProps) {
 
       <div className="space-y-2.5 p-4">
         <Metric label="session" value={sessionId ? `${sessionId.slice(0, 8)}…` : "new"} />
-        <Metric label="sessions in memory" value={String(memoryCount)} />
+        <Metric label="sessions in memory" value={String(sessions.length)} />
         <Metric label="tools online" value={String(tools.length)} />
       </div>
 
@@ -71,7 +106,7 @@ export function MemoryPanel({ sessionId }: MemoryPanelProps) {
           className="flex w-full items-center justify-between rounded-card border border-line bg-ground px-3 py-2.5 text-[13px] text-ink-faint transition-colors hover:border-ink-faint hover:text-ink-dim"
         >
           Search memory
-          <span className="font-mono text-[11px]">⌘K</span>
+          <span className="font-mono text-[11px]">{isMac ? "⌘K" : "Ctrl K"}</span>
         </button>
       </div>
 
@@ -97,10 +132,13 @@ export function MemoryPanel({ sessionId }: MemoryPanelProps) {
 
       {open ? (
         <div
-          className="fixed inset-0 z-50 bg-ground/70 backdrop-blur-sm"
+          className="fixed inset-0 z-50 bg-ground/70 backdrop-blur-xs"
           onClick={() => setOpen(false)}
         >
           <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Search memory"
             className="mx-auto mt-[12vh] max-w-xl rounded-card border border-line bg-panel p-4 shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
@@ -109,10 +147,15 @@ export function MemoryPanel({ sessionId }: MemoryPanelProps) {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search working, episodic, and semantic memory…"
+              aria-label="Search memory"
               className="w-full rounded-lg border border-line bg-ground px-4 py-3 text-[14px] text-ink placeholder:text-ink-faint focus:border-signal/50 focus:ring-0"
             />
             <div className="mt-3 max-h-[50vh] space-y-2 overflow-y-auto">
-              {results.length === 0 && query.trim().length >= 2 ? (
+              {current?.failed ? (
+                <p className="px-1 py-2 font-mono text-[12px] text-bad">
+                  Memory search failed. Is the CORTEX API running?
+                </p>
+              ) : current && results.length === 0 ? (
                 <p className="px-1 py-2 font-mono text-[12px] text-ink-faint">No matches.</p>
               ) : null}
               {results.map((item) => (
@@ -138,4 +181,8 @@ function Metric({ label, value }: { label: string; value: string }) {
       <span className="max-w-[55%] truncate font-mono text-[12.5px] text-ink">{value}</span>
     </div>
   );
+}
+
+function subscribeToNothing(): () => void {
+  return () => {};
 }

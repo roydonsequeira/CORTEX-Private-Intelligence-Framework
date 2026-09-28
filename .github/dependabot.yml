@@ -15,15 +15,22 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    # Minor and patch updates arrive together; each major version gets its own
+    # PR, so one breaking upgrade can't block the rest.
     groups:
       ui-dependencies:
         patterns:
           - "*"
-    # Temporary: major versions (Next 16, Tailwind 4, ESLint 10) need code changes,
-    # so they are upgraded by hand. Remove once the UI is on Next 16; Next 15
-    # security support ends on 21 Oct 2026.
+        update-types: ["minor", "patch"]
     ignore:
-      - dependency-name: "*"
+      # eslint-config-next's plugins (react, jsx-a11y, import) support ESLint 9 only.
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
+      # typescript-eslint doesn't support TypeScript 7 yet (it needs < 6.1).
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # Node types follow the Node.js major the UI runs on (24, see ui/Dockerfile).
+      - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
