@@ -6,6 +6,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- `next dev` no longer writes `AGENTS.md` and `CLAUDE.md` into `ui/` when it runs
+  under an AI coding agent (`agentRules: false`). Next.js 16.3 adds them by
+  default, so they showed up as untracked files after every dev run.
+
 ## [1.2.0] - 2026-09-28
 
 A pre-launch audit covering install, security, the Python sandbox, the live
