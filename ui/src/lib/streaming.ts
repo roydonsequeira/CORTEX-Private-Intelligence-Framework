@@ -40,6 +40,8 @@ export function useAgentStream(initialSessionId: string | null = null): StreamSt
       setIsStreaming(true);
       setError(null);
       append({ type: "user", value: message });
+      let received = false;
+      let finished = false;
 
       try {
         const response = await fetch(`${API_URL}/chat/stream`, {
@@ -56,6 +58,10 @@ export function useAgentStream(initialSessionId: string | null = null): StreamSt
           throw new Error(httpErrorMessage(response.status));
         }
         await parseSse(response.body, (event) => {
+          received = true;
+          if (event.type === "done" || event.type === "error") {
+            finished = true;
+          }
           append(event);
           if (event.type === "session_id") {
             setSessionId(event.value);
@@ -64,9 +70,15 @@ export function useAgentStream(initialSessionId: string | null = null): StreamSt
             setError(event.message);
           }
         });
+        if (!finished) {
+          throw new Error(
+            "The connection to CORTEX closed before the answer finished. " +
+              "Check that the API is still running, then try again."
+          );
+        }
       } catch (exc) {
         if ((exc as Error).name !== "AbortError") {
-          const message = (exc as Error).message;
+          const message = describeFailure(exc as Error, received);
           setError(message);
           append({ type: "error", message });
         }
@@ -78,6 +90,17 @@ export function useAgentStream(initialSessionId: string | null = null): StreamSt
   );
 
   return { events, isStreaming, error, sessionId, sendMessage, reset };
+}
+
+// fetch() rejects with a bare TypeError ("Failed to fetch") when the API is
+// down or the stream breaks; say what that means instead.
+function describeFailure(exc: Error, received: boolean): string {
+  if (exc.name !== "TypeError") {
+    return exc.message;
+  }
+  return received
+    ? "The connection to CORTEX was lost before the answer finished. Try again."
+    : `Can't reach the CORTEX API at ${API_URL}. Is "cortex serve" running?`;
 }
 
 function httpErrorMessage(status: number): string {
@@ -103,6 +126,12 @@ async function parseSse(
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  const emit = (frame: string) => {
+    const line = frame.split("\n").find((item) => item.startsWith("data: "));
+    if (line) {
+      onEvent(JSON.parse(line.slice(6)) as AgentEvent);
+    }
+  };
 
   while (true) {
     const { value, done } = await reader.read();
@@ -112,12 +141,11 @@ async function parseSse(
     buffer += decoder.decode(value, { stream: true });
     const frames = buffer.split("\n\n");
     buffer = frames.pop() ?? "";
-    for (const frame of frames) {
-      const line = frame.split("\n").find((item) => item.startsWith("data: "));
-      if (!line) {
-        continue;
-      }
-      onEvent(JSON.parse(line.slice(6)) as AgentEvent);
-    }
+    frames.forEach(emit);
+  }
+  // A final event without the trailing blank line is still an event.
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    emit(buffer);
   }
 }

@@ -38,7 +38,9 @@ export function ChatInput({ disabled, onSubmit }: ChatInputProps) {
             value={message}
             onChange={(event) => setMessage(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
+              // isComposing: Enter that confirms an IME candidate (Chinese,
+              // Japanese, Korean input) must not send a half-typed message.
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 submit();
               }
