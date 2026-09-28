@@ -58,9 +58,20 @@ varies run to run, so re-run a failing case before concluding.
 | First run, before fixes | 29 | — | — |
 | After the first round of fixes | 38 | 125 | 11 |
 | Final verification | **39** | **134** | **11** |
+| Pre-launch audit (28 Sep 2026) | 38 | 135 | **11** |
 
 The three remaining misses were fixed and passed on re-run; a targeted re-run of
 every case that had ever failed passed 45/45 over three rounds. The battery found
 27 issues the unit tests had missed — including an SSRF hole in `web_fetch` and a
 prompt injection hidden in quoted text — each fixed in code with a regression
 test (see `CHANGELOG.md`, 1.1.0).
+
+The pre-launch audit run had three misses:
+- I05 and I17: after the sandbox refused the user's code, the model answered
+  with a directory listing instead. This is now fixed in code (see
+  `CHANGELOG.md`, Unreleased).
+- 23: a correct but verbose explanation. One run added a code block; another
+  took 51 s against a 45 s limit.
+
+After the fix, a re-run of every sandbox, code, "run it" and counting case (68
+cases) passed 67. The only miss was 23 again, on length.

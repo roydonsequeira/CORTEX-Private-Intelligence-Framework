@@ -134,7 +134,11 @@ def doctor() -> int:
         else:
             print(f"{_OK} {role}: {model}")
 
-    for label, path in (("episodic db", settings.db_path.parent), ("chroma", settings.chroma_path)):
+    for label, path in (
+        ("episodic db", settings.db_path.parent),
+        ("chroma", settings.chroma_path),
+        ("workspace (the agent's files)", settings.allowed_root),
+    ):
         try:
             path.mkdir(parents=True, exist_ok=True)
             probe = path / ".cortex-write-test"

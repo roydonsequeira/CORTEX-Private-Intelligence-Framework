@@ -52,6 +52,8 @@ class AgentState(BaseModel):
     stalled: bool = Field(default=False, exclude=True)
     # The planner saw procedural-memory hints for this run.
     hinted: bool = Field(default=False, exclude=True)
+    # Set when the sandbox refused code the user supplied: the answer to give.
+    refusal: str | None = Field(default=None, exclude=True)
 
 
 class AgentKernel:
@@ -251,6 +253,13 @@ class AgentKernel:
             )
             if persist:
                 await self._store_step_tools(sid, state, results_before)
+            if state.refusal is not None:
+                # The sandbox refused the user's own code: say so, rather than
+                # let the model reach the same goal through another tool.
+                state.messages.append(Message(role="assistant", content=state.refusal))
+                state.final_answer = state.refusal
+                state.status = "complete"
+                break
 
             # Tools the model attempted this run (a failed attempt still counts).
             used = {call.name for m in state.messages for call in (m.tool_calls or [])}
