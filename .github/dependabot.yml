@@ -19,6 +19,12 @@ updates:
       ui-dependencies:
         patterns:
           - "*"
+    # Temporary: major versions (Next 16, Tailwind 4, ESLint 10) need code changes,
+    # so they are upgraded by hand. Remove once the UI is on Next 16; Next 15
+    # security support ends on 21 Oct 2026.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
