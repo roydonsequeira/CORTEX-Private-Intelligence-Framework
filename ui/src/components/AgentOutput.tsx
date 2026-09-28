@@ -92,7 +92,7 @@ function TurnBlock({ turn, streaming }: { turn: Turn; streaming: boolean }) {
     <div className="space-y-3">
       {turn.user ? (
         <div className="flex justify-end">
-          <p className="max-w-[85%] rounded-card rounded-br-sm bg-raised px-4 py-2.5 text-[15px] leading-relaxed text-ink">
+          <p className="max-w-[85%] rounded-card rounded-br-xs bg-raised px-4 py-2.5 text-[15px] leading-relaxed text-ink">
             {turn.user}
           </p>
         </div>
