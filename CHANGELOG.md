@@ -6,8 +6,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-28
+
+A pre-launch audit covering install, security, the Python sandbox, the live
+battery, the UI and the docs. The headline changes:
+- the agent's files now live in a dedicated `workspace/` folder, not the
+  project root;
+- `print()` inside functions works in `python_exec`;
+- the UI is on Next.js 16 before Next.js 15's security support ends.
+
+Tests: 223 → 256. The live battery scored 38/39 on the plan, 135/137 on the
+extra prompts and 11/11 on ops. The two extra-prompt misses were fixed in code
+and passed on re-run.
+
 ### Changed
 
+- The API's reported version (in `/docs`) comes from the installed package, so
+  it can't drift from `pyproject.toml`.
 - **UI on Next.js 16, Tailwind CSS 4 and ESLint 9** (flat config). Next.js 15's
   security support ends on 21 Oct 2026. The Tailwind theme moved from
   `tailwind.config.ts` into `globals.css`; `npm run lint` runs the ESLint CLI
