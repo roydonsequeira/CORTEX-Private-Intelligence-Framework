@@ -2,9 +2,11 @@
 
 import asyncio
 import ipaddress
+import re
 import socket
 import ssl
 import time
+from html import unescape
 from typing import Any, Literal
 from urllib import robotparser
 from urllib.parse import urljoin, urlparse
@@ -170,6 +172,12 @@ class WebFetchTool(BaseTool):
                 # HTML conversion of a large page is CPU-bound: keep it off the event loop.
                 convert = _to_markdown if output_format == "markdown" else _strip_html
                 output = await asyncio.to_thread(convert, raw)
+                title = _page_title(raw)
+                if title:
+                    # The conversion drops <head>, and some pages carry their name
+                    # only there (example.com has no heading since 2025), so "what
+                    # is the page title?" had no answer in the text.
+                    output = f"Title: {title}\n\n{output}"
             else:
                 output = raw
             if len(output) > _MAX_OUTPUT_CHARS:
@@ -255,6 +263,19 @@ def _normalise_url(url: str) -> str:
     if cleaned and "://" not in cleaned:
         cleaned = "https://" + cleaned.lstrip("/")
     return cleaned
+
+
+_TITLE = re.compile(r"<title\b[^>]*>(.*?)</title\s*>", re.IGNORECASE | re.DOTALL)
+_MAX_TITLE_CHARS = 200
+
+
+def _page_title(html: str) -> str:
+    """The page's <title>, unescaped and on one line ("" when there is none)."""
+    match = _TITLE.search(html)
+    if match is None:
+        return ""
+    title = " ".join(unescape(re.sub(r"<[^>]+>", "", match.group(1))).split())
+    return title[:_MAX_TITLE_CHARS]
 
 
 def _to_markdown(html: str) -> str:

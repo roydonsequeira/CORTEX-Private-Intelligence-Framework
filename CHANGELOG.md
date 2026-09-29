@@ -6,11 +6,50 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+A final launch check: a fresh install from GitHub, the full live battery on the
+new dependency versions, and targeted prompt-injection tests. Those tests found
+two ways for text CORTEX reads to send data off the machine; both are now closed
+in code.
+
+### Security
+
+- **Answers no longer load images.** The UI shows an image in an answer as a
+  link. A web page or document the model had read could make it end its answer
+  with `![logo](https://…?u=…)`; in a live test it did so in three runs out of
+  three, and the browser would have requested that address the moment the answer
+  appeared.
+- **`web_fetch` opens only web addresses you wrote in the conversation.** An
+  instruction planted in a workspace file made the model call `web_fetch` on the
+  planted URL in three runs out of three, and a URL can carry data in its path
+  or query. Addresses from files, pages or the model's own guesses are refused
+  with a message the model passes on; the scheme, a leading `www.` and a
+  trailing slash may differ from what you typed, the path and query may not.
+- With `api_key` set, an `Authorization` header with non-ASCII characters caused
+  a server error instead of a 401, and a key with non-ASCII characters could
+  never match. Paths that merely start with `/health` or `/docs` (such as a
+  future `/health-report`) no longer skip the key check.
+
+### Fixed
+
+- `web_fetch` includes the page's `<title>`. example.com now shows its name only
+  there, so "tell me the page title" got the answer that the page has none.
+- A file name the model put in `content` instead of `path` on a read is used as
+  the path. The call used to fail validation, and the model then told the user
+  it could not read the file.
+- Finding imports in code with a long run of blank lines took half a second.
+
 ### Changed
 
-- `next dev` no longer writes `AGENTS.md` and `CLAUDE.md` into `ui/` when it runs
-  under an AI coding agent (`agentRules: false`). Next.js 16.3 adds them by
-  default, so they showed up as untracked files after every dev run.
+- Minimum versions of the Python dependencies were raised to their current
+  releases, among them FastAPI 0.141, Uvicorn 0.54, Pydantic 2.13, ChromaDB
+  1.5.9, OpenTelemetry 1.45 and structlog 26. After pulling, run
+  `pip install -e .` again.
+- The README and the UI say what stays on your machine (chats, files and
+  memory) instead of "nothing leaves your computer": `web_fetch` does go online
+  when you ask it to.
+- Packaging declares the license as an SPDX expression (`license = "MIT"`),
+  which removes the setuptools deprecation warnings from every install. The
+  nonexistent `httpx[testing]` extra is gone from the `dev` dependencies.
 
 ## [1.2.0] - 2026-09-28
 

@@ -227,12 +227,12 @@ async def test_rate_limit_returns_429() -> None:
     assert "Retry-After" in second.headers
 
 
-def _api_key_app() -> FastAPI:
+def _api_key_app(api_key: str = "s3cret") -> FastAPI:
     """A minimal app protected by APIKeyMiddleware with a known key."""
     from cortex.api.middleware.auth import APIKeyMiddleware
 
     protected = FastAPI()
-    protected.add_middleware(APIKeyMiddleware, api_key="s3cret")
+    protected.add_middleware(APIKeyMiddleware, api_key=api_key)
 
     @protected.get("/tools")
     async def tools_route() -> dict[str, str]:
@@ -274,6 +274,44 @@ async def test_api_key_health_is_always_open() -> None:
         response = await client.get("/health")
 
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_api_key_non_ascii_header_is_rejected_not_a_crash() -> None:
+    """A non-ASCII Authorization header gets a 401, not a server error."""
+    transport = httpx.ASGITransport(app=_api_key_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
+        response = await client.get("/tools", headers={b"Authorization": "Bearer clé".encode()})
+
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_api_key_may_contain_non_ascii_characters() -> None:
+    """A key with non-ASCII characters works when the client sends it as UTF-8."""
+    transport = httpx.ASGITransport(app=_api_key_app("clé-secrète"))
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
+        response = await client.get(
+            "/tools", headers={b"Authorization": "Bearer clé-secrète".encode()}
+        )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_api_key_exemptions_match_whole_paths() -> None:
+    """Only /health itself (and the docs) skip the key, not every path starting with it."""
+    protected = _api_key_app()
+
+    @protected.get("/health-report")
+    async def report_route() -> dict[str, str]:
+        return {"ok": "true"}
+
+    transport = httpx.ASGITransport(app=protected)
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
+        response = await client.get("/health-report")
+
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio
