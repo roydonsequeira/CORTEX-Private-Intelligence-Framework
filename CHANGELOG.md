@@ -6,10 +6,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-09-29
+
 A final launch check: a fresh install from GitHub, the full live battery on the
 new dependency versions, and targeted prompt-injection tests. Those tests found
 two ways for text CORTEX reads to send data off the machine; both are now closed
 in code.
+
+Tests: 256 → 264. On this build the live battery scored 39/39 on the plan,
+136/137 on the extra prompts and 11/11 on ops. The miss, I04, was a correct
+answer over its time limit, and it passed three re-runs.
 
 ### Security
 

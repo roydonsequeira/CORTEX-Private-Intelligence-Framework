@@ -34,7 +34,7 @@ Small local models break rules that prompts ask them to follow. Driving CORTEX w
 - **Answers never load images** — the UI shows an image in an answer as a link, so an injected `![](https://…?data)` can't send anything out when the answer appears.
 - **Memory learns only what you say about yourself**, and only durable facts.
 
-The [live test battery](evals/live_battery/) is in the repo: 39/39 on the test plan, 134/137 extra prompts (the rest fixed and re-run clean), 11/11 ops and security checks. It found 27 issues the unit tests had missed.
+The [live test battery](evals/live_battery/) is in the repo. On the release build it scored 39/39 on the test plan, 136/137 extra prompts (the miss was a correct answer over its time limit, and it passed on re-run) and 11/11 ops and security checks. It found 27 issues the unit tests had missed.
 
 ## Architecture
 
