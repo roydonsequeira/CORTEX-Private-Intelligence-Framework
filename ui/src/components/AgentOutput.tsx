@@ -83,13 +83,33 @@ function unwrapMarkdownFences(text: string): string {
 
 // Links open in a new tab: following one in place would unload the page and
 // lose the conversation, which lives only in this tab.
+//
+// Images are shown as links and never loaded. A web page or document the model
+// has read can tell it to end its answer with ![logo](https://…?u=…); as an
+// <img>, the browser would request that URL, and whatever the model put in it,
+// the moment the answer rendered. As a link, opening it is the user's choice.
 const MARKDOWN_COMPONENTS: Components = {
   a: ({ href, title, children }) => (
     <a href={href} title={title} target="_blank" rel="noopener noreferrer">
       {children}
     </a>
-  )
+  ),
+  img: ({ src, alt }) =>
+    typeof src === "string" && src ? (
+      <a href={src} title={src} target="_blank" rel="noopener noreferrer">
+        [image: {imageLabel(src, alt)}]
+      </a>
+    ) : null
 };
+
+function imageLabel(src: string, alt: string | undefined): string {
+  const name = alt?.trim() || "untitled";
+  try {
+    return `${name}, ${new URL(src).host}`;
+  } catch {
+    return name; // a relative URL has no host to show
+  }
+}
 
 function TurnBlock({ turn, streaming }: { turn: Turn; streaming: boolean }) {
   const plan = turn.events.find((e) => e.type === "plan") as
@@ -235,8 +255,9 @@ function EmptyState({ onRun }: { onRun: (prompt: string) => void }) {
         A private agent that thinks on your machine.
       </h1>
       <p className="mt-3 max-w-xl text-[15px] leading-relaxed text-ink-dim">
-        CORTEX plans, calls local tools, and remembers across the conversation. Nothing
-        leaves this computer. Ask it something, or start with one of these:
+        CORTEX plans, calls local tools, and remembers across the conversation. Your
+        chats, files and memory stay on this computer. Ask it something, or start with
+        one of these:
       </p>
       <div className="mt-6 grid gap-2.5 sm:grid-cols-2">
         {EXAMPLES.map((prompt) => (

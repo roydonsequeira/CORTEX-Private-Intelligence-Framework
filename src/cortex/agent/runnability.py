@@ -15,7 +15,9 @@ from cortex.tools.sandbox import _SAFE_MODULES
 
 _RUN_REQUEST = re.compile(r"\b(run|execute|exec|output)\b", re.IGNORECASE)
 _CODE_BLOCK = re.compile(r"```(?:python|py)?[ \t]*\n(.*?)(?:```|\Z)", re.DOTALL | re.IGNORECASE)
-_IMPORT = re.compile(r"^\s*(?:from|import)\s+([A-Za-z_]\w*)", re.MULTILINE)
+# Indentation is [ \t]*, not \s*: \s also matches newlines, which made a long
+# run of blank lines quadratic (half a second for 8,000 of them).
+_IMPORT = re.compile(r"^[ \t]*(?:from|import)\s+([A-Za-z_]\w*)", re.MULTILINE)
 _GUI_MODULES = {"tkinter", "turtle", "curses"}
 # Import names whose pip package is named differently.
 _PIP_NAMES = {

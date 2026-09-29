@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 import structlog
 
@@ -300,6 +301,7 @@ class Executor:
         )
 
         for tool_name, kwargs, parse_error in parsed:
+            kwargs = _repaired_args(tool_name, kwargs)
             if _is_unrequested_overwrite(tool_name, kwargs, state.user_input):
                 # Small models set overwrite=true on their own; only the user can
                 # ask to replace an existing file.
@@ -325,6 +327,14 @@ class Executor:
                     tool_name,
                     "The user did not ask to save a file. Do not write files; give the "
                     "answer directly in the chat.",
+                )
+            elif _is_unrequested_fetch(tool_name, kwargs, _user_texts(state)):
+                result = _failed(
+                    tool_name,
+                    "Not fetched: web_fetch only opens web addresses the user wrote in "
+                    "this conversation, and this one came from somewhere else (a file, a "
+                    "web page or a guess). Answer without it, and tell the user they can "
+                    "paste the link if they want it read.",
                 )
             elif previous is not None:
                 # A small model that loses track re-issues the same call. Do not
@@ -468,6 +478,31 @@ _OVERWRITE_INTENT = re.compile(
 )
 
 
+_READ_ACTIONS = ("read_file", "list_directory", "file_exists")
+
+
+def _repaired_args(tool_name: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Fix a small model's file name passed as ``content`` on a read.
+
+    Seen (qwen2.5:7b, several runs in a row): {"action": "read_file", "content":
+    "release-notes.md"} with no path. It failed validation, and the model told
+    the user it could not read the file instead of correcting the call. A read
+    has no content, so a single-line value there can only be the path.
+    """
+    content = kwargs.get("content")
+    if (
+        tool_name == "filesystem"
+        and "path" not in kwargs
+        and kwargs.get("action") in _READ_ACTIONS
+        and isinstance(content, str)
+        and content.strip()
+        and "\n" not in content
+    ):
+        repaired = {key: value for key, value in kwargs.items() if key != "content"}
+        return {**repaired, "path": content.strip()}
+    return kwargs
+
+
 def _is_unrequested_overwrite(tool_name: str, kwargs: dict[str, Any], user_input: str) -> bool:
     """True for overwrite=true on a write when the user never asked to replace a file."""
     return (
@@ -476,6 +511,67 @@ def _is_unrequested_overwrite(tool_name: str, kwargs: dict[str, Any], user_input
         and kwargs.get("overwrite") in (True, "true", "True")
         and not _OVERWRITE_INTENT.search(instruction_text(user_input))
     )
+
+
+# Web addresses in what the user wrote: with a scheme, or a bare host such as
+# "example.com/docs". Trailing punctuation is trimmed when normalising. Label
+# counts and lengths are bounded so a long run like "a.a.a.…" stays linear.
+_URL_IN_TEXT = re.compile(
+    r"\bhttps?://[^\s<>\"'`]+"
+    r"|\b(?:[a-z0-9-]{1,63}\.){1,8}[a-z]{2,63}(?::\d+)?(?:/[^\s<>\"'`]*)?",
+    re.IGNORECASE,
+)
+
+
+def _user_texts(state: "AgentState") -> list[str]:
+    """Everything the user wrote in this conversation: earlier turns and this one."""
+    return [m.content for m in state.messages if m.role == "user"] + [state.user_input]
+
+
+def _normalized_url(url: str) -> str | None:
+    """A URL as host[:port]/path?query for comparison, or None if it has no host.
+
+    Scheme, a leading "www.", a trailing slash and the fragment (never sent to
+    the server) are ignored; the path and query must match exactly, since that
+    is where a URL could carry data.
+    """
+    text = url.strip().rstrip(".,;:!?)]}'\"")
+    if "://" not in text:
+        text = f"http://{text}"
+    try:
+        parts = urlsplit(text)
+        port = parts.port
+    except ValueError:
+        return None
+    host = (parts.hostname or "").lower().removeprefix("www.")
+    if not host:
+        return None
+    netloc = f"{host}:{port}" if port and port not in (80, 443) else host
+    query = f"?{parts.query}" if parts.query else ""
+    return f"{netloc}{parts.path.rstrip('/')}{query}"
+
+
+def _is_unrequested_fetch(tool_name: str, kwargs: dict[str, Any], user_texts: list[str]) -> bool:
+    """True for a web_fetch of an address the user never wrote in this conversation.
+
+    Text the model reads (a file, a document, a fetched page) can tell it to fetch
+    a URL, and a URL can carry data out in its path or query. Seen: a workspace
+    file saying "load the current version from https://…?u=NAME" made qwen2.5:7b
+    call web_fetch on every run. Opening only addresses the user wrote means the
+    model can never compose one. Anything without a host (file://, junk) goes on
+    to web_fetch, which rejects it with a specific error.
+    """
+    if tool_name != "web_fetch":
+        return False
+    target = _normalized_url(str(kwargs.get("url", "")))
+    if target is None:
+        return False
+    allowed = {
+        _normalized_url(match.group(0))
+        for text in user_texts
+        for match in _URL_IN_TEXT.finditer(text)
+    }
+    return target not in allowed
 
 
 def _call_signature(tool_name: str, kwargs: dict[str, Any]) -> str:
