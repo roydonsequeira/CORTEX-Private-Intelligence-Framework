@@ -59,6 +59,7 @@ varies run to run, so re-run a failing case before concluding.
 | After the first round of fixes | 38 | 125 | 11 |
 | Final verification | **39** | **134** | **11** |
 | Pre-launch audit (28 Sep 2026) | 38 | 135 | **11** |
+| Launch check (29 Sep 2026) | **39** | 136 | **11** |
 
 The three remaining misses were fixed and passed on re-run; a targeted re-run of
 every case that had ever failed passed 45/45 over three rounds. The battery found
@@ -69,9 +70,17 @@ test (see `CHANGELOG.md`, 1.1.0).
 The pre-launch audit run had three misses:
 - I05 and I17: after the sandbox refused the user's code, the model answered
   with a directory listing instead. This is now fixed in code (see
-  `CHANGELOG.md`, Unreleased).
+  `CHANGELOG.md`, 1.2.0).
 - 23: a correct but verbose explanation. One run added a code block; another
   took 51 s against a 45 s limit.
 
 After the fix, a re-run of every sandbox, code, "run it" and counting case (68
 cases) passed 67. The only miss was 23 again, on length.
+
+The launch check ran on a fresh install from GitHub with the dependency versions
+of 1.2.1. Its one miss was I04: a correct answer that took 58 s against a 45 s
+limit, because the model fetched google.com before running Python. It passed
+three re-runs in 8 to 10 s. Targeted tests alongside it found two ways for text
+the model reads to send data out that no battery case covered: an image in an
+answer, and a `web_fetch` of an address planted in a file. Both are closed in
+code and pinned by unit tests (see `CHANGELOG.md`, 1.2.1).
