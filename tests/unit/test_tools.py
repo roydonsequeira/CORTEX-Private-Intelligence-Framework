@@ -103,6 +103,22 @@ async def test_web_fetch_tool_converts_html_to_markdown() -> None:
 
 
 @pytest.mark.asyncio
+async def test_web_fetch_includes_the_page_title() -> None:
+    """A title that exists only in <head> is kept: example.com's page has no heading."""
+    html = (
+        "<html><head><title>Example &amp;\n Domain</title></head>"
+        "<body><p>This domain is for use in documentation examples.</p></body></html>"
+    )
+    tool, _ = _web_tool(
+        {"/": httpx.Response(200, text=html, headers={"content-type": "text/html"})}
+    )
+    result = await tool.execute(url="https://example.com/")
+    await tool.aclose()
+    assert result.output.startswith("Title: Example & Domain\n\n")
+    assert "documentation examples" in result.output
+
+
+@pytest.mark.asyncio
 async def test_tool_registry_validates_schema() -> None:
     """ToolRegistry returns a ToolResult error for invalid kwargs."""
 

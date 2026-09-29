@@ -2,10 +2,10 @@
 
 > "Intelligence that stays yours."
 
-**A private AI agent that runs entirely on your own machine** — it plans, uses sandboxed tools, remembers you across sessions, and streams every step live, on a laptop GPU with 6 GB of VRAM. No cloud, no API keys, nothing leaves your computer.
+**A private AI agent that runs entirely on your own machine** — it plans, uses sandboxed tools, remembers you across sessions, and streams every step live, on a laptop GPU with 6 GB of VRAM. No cloud, no API keys, and your chats, files and memory never leave your computer.
 
 [![CI](https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/actions/workflows/ci.yml/badge.svg)](https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/actions/workflows/ci.yml)
-![Tests](https://img.shields.io/badge/tests-256%20unit%20%2B%20187%20live-brightgreen)
+![Tests](https://img.shields.io/badge/tests-264%20unit%20%2B%20187%20live-brightgreen)
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Docker](https://img.shields.io/badge/Docker-Compose-blue)
@@ -30,10 +30,11 @@ Small local models break rules that prompts ask them to follow. Driving CORTEX w
 - **Quoted or pasted text is data** — it never counts as the user asking for a file write, a tool or a run, so injected instructions can't trigger actions.
 - **Skipped or faked tool use is recovered** — if the plan and the user both call for a tool and the model answers without it, CORTEX runs the code the model wrote or asks for the tool, once.
 - **"Run it" on a game or GUI program** gets an instant, honest answer (no window or keyboard in the sandbox, plus the local run command) instead of a repasted program.
-- **Web fetch reaches public sites only** — loopback, private-network and cloud-metadata addresses are refused after DNS resolution and on every redirect.
+- **Web fetch opens only addresses you wrote, on public sites only** — a URL planted in a file or page (which could carry your data out in its path or query) is refused, and loopback, private-network and cloud-metadata addresses are refused after DNS resolution and on every redirect.
+- **Answers never load images** — the UI shows an image in an answer as a link, so an injected `![](https://…?data)` can't send anything out when the answer appears.
 - **Memory learns only what you say about yourself**, and only durable facts.
 
-The [live test battery](evals/live_battery/) is in the repo: 39/39 on the test plan, 134/137 extra prompts (the rest fixed and re-run clean), 11/11 ops and security checks. It found 27 issues the unit tests had missed.
+The [live test battery](evals/live_battery/) is in the repo. On the release build it scored 39/39 on the test plan, 136/137 extra prompts (the miss was a correct answer over its time limit, and it passed on re-run) and 11/11 ops and security checks. It found 27 issues the unit tests had missed.
 
 ## Architecture
 
@@ -214,8 +215,8 @@ CORTEX is designed to run on hardware you control, and its guardrails are built 
   - `restricted` (default) — compiled with RestrictedPython and run in a separate spawned process with a hard timeout. The attribute guard blocks dunder access and any traversal that would return a module object, closing escapes such as `json → codecs → sys → sys.modules['os']`. Its `open()` is read-only and confined to the workspace: it follows the filesystem tool's path rules (no `..`, no absolute paths, symlinks resolved, 1 MB, text only), never opens hidden paths such as `.env`, `.git` or `.cortex`, and hands the snippet an in-memory copy rather than a file handle. This is a best-effort in-process sandbox, **not** a guarantee against a determined adversary.
   - `container` — each snippet runs in an ephemeral Docker container with the network disabled, a read-only root filesystem, all Linux capabilities dropped, `no-new-privileges`, a tmpfs workdir, and CPU/memory/pid limits, so the OS process boundary is the real isolation layer. Use this for untrusted or multi-tenant workloads (`pip install 'cortex-agent[container]'`).
 - **Filesystem** access is confined to a dedicated workspace folder (`workspace/` next to `cortex.yaml`, set by `allowed_root`), so the agent can't read `cortex.yaml` or change CORTEX's own code. It rejects `..` traversal and absolute or system paths with a clear "access denied", enforces read/write size caps, and restricts writable extensions. Hidden paths (`.git`, `.venv`, `.env`, `.cortex`) are never read, listed, indexed or written. CORTEX's own package and plugins folder stay read-only even if you widen `allowed_root` over them, since a plugin written there would run unsandboxed on the next start. Writes never overwrite an existing file unless `overwrite: true` is passed. There is no delete capability.
-- **Prompt injection** is handled with least privilege rather than prompt wording alone: destructive requests are refused, and when the plan is a direct answer or a refusal the model is given no tools at all; at most three tool calls run per step; content from files, documents and web pages is treated as untrusted data; and every tool call is schema-validated, time-limited and traced.
-- **Web fetch** reaches public hosts only: loopback, private-network, link-local (cloud metadata) and reserved addresses are refused after DNS resolution and again on every redirect hop, so a prompt or an injected page cannot use it to probe your machine or network. It honours `robots.txt`, verifies TLS against the operating system trust store, stops downloading at 2 MB (a link to a huge file can't fill memory), refuses binary files such as PDFs and images without downloading them, caps output size, and reports specific errors (HTTP status, timeout, offline).
+- **Prompt injection** is handled with least privilege rather than prompt wording alone: destructive requests are refused, and when the plan is a direct answer or a refusal the model is given no tools at all; at most three tool calls run per step; content from files, documents and web pages is treated as untrusted data; and every tool call is schema-validated, time-limited and traced. A small model does follow instructions planted in what it reads, so the two ways such text could carry data out are closed in code: `web_fetch` opens only addresses you wrote (below), and the UI shows images in an answer as links instead of loading them.
+- **Web fetch** opens only web addresses you wrote in the conversation. A URL taken from a file, a document, a page or the model's own guess is refused, so injected text can't make CORTEX contact a site of its choosing or carry data out in a URL's path or query; the scheme, a leading `www.` and a trailing slash may differ from what you typed. It reaches public hosts only: loopback, private-network, link-local (cloud metadata) and reserved addresses are refused after DNS resolution and again on every redirect hop, so a prompt or an injected page cannot use it to probe your machine or network. It honours `robots.txt`, verifies TLS against the operating system trust store, stops downloading at 2 MB (a link to a huge file can't fill memory), refuses binary files such as PDFs and images without downloading them, caps output size, and reports specific errors (HTTP status, timeout, offline).
 - **Quoted and pasted text is data:** text you hand CORTEX to summarise, translate or analyse never counts as you asking for a file write, a tool or a run, and a file is overwritten only when you explicitly ask.
 - **Calculator** evaluates an expression tree without `eval` and bounds exponents and factorials, so an expression like `9**9**9` cannot stall the API.
 - **API** requests are validated with Pydantic, rate limited per IP with a token bucket, and refused while the server drains for graceful shutdown. Authentication is off by default for localhost; set `api_key` (e.g. via `CORTEX_API_KEY`) to require a bearer token on every route except `/health` and the docs, and narrow `cors_origins` before exposing the API beyond your machine. The bundled UI doesn't send a key, so it stops working once `api_key` is set; to use the UI remotely, put an authenticating reverse proxy in front of both instead.
@@ -278,7 +279,7 @@ See [DEMO.md](DEMO.md) for reproducible examples.
 ## Testing
 
 ```bash
-pytest                 # 256 unit and integration tests (the model is mocked)
+pytest                 # 264 unit and integration tests (the model is mocked)
 pytest -m ollama       # live tests against a running Ollama
 ruff check src tests && mypy src tests   # lint and strict type checking
 ```
