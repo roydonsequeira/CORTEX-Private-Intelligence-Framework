@@ -91,6 +91,15 @@ def test_api_version_is_the_package_version(app: FastAPI) -> None:
     assert app.version == version("cortex-agent")
 
 
+def test_dunder_version_is_the_package_version() -> None:
+    """cortex.__version__ said 0.1.0 through every release up to 1.2.1."""
+    from importlib.metadata import version
+
+    import cortex
+
+    assert cortex.__version__ == version("cortex-agent")
+
+
 @pytest.mark.asyncio
 async def test_chat_message_returns_agent_state(app: FastAPI) -> None:
     """POST /chat/message returns a valid AgentState JSON payload."""
