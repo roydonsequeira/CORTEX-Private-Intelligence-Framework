@@ -10,7 +10,7 @@ import structlog
 from opentelemetry.trace import Span
 from pydantic import BaseModel, Field
 
-from cortex.agent.executor import Executor, instruction_text
+from cortex.agent.executor import Executor
 from cortex.agent.loop import LATSLoop
 from cortex.agent.planner import Planner
 from cortex.agent.reflector import Reflector
@@ -21,6 +21,7 @@ from cortex.memory.manager import MemoryManager
 from cortex.models.provider import Message
 from cortex.models.router import ModelCapability, ModelRouter
 from cortex.observability.tracing import get_tracer
+from cortex.provenance import instruction_text
 from cortex.tools.base import ToolResult
 from cortex.tools.registry import ToolRegistry
 

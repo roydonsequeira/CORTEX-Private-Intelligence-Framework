@@ -78,7 +78,6 @@ async def _consolidate(
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="#54 SR-04: only the LLM separates data facts from user facts")
 @pytest.mark.parametrize("case", CASES.values(), ids=CASES.keys())
 async def test_facts_from_processed_data_are_not_remembered(
     tmp_path: Path, case: tuple[str, str, list[str], list[str]]
@@ -102,7 +101,6 @@ async def test_positive_control_self_statement_is_remembered(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="#54 SR-04: a stored 'fact' can carry standing instructions")
 async def test_instruction_shaped_fact_is_not_remembered(tmp_path: Path) -> None:
     """A 'fact' that is really an instruction would reach every future system prompt."""
     stored = await _consolidate(

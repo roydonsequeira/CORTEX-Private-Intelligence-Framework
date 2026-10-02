@@ -32,7 +32,7 @@ Small local models break rules that prompts ask them to follow. Driving CORTEX w
 - **"Run it" on a game or GUI program** gets an instant, honest answer (no window or keyboard in the sandbox, plus the local run command) instead of a repasted program.
 - **Web fetch opens only addresses you wrote, on public sites only** — a URL planted in a file or page (which could carry your data out in its path or query) is refused, and loopback, private-network and cloud-metadata addresses are refused after DNS resolution and on every redirect.
 - **Answers never load images** — the UI shows an image in an answer as a link, so an injected `![](https://…?data)` can't send anything out when the answer appears.
-- **Memory learns only what you say about yourself**, and only durable facts.
+- **Memory learns only what you say about yourself**, and only durable facts — facts inside text you paste or ask it to process are never stored, and every stored fact must be backed by your own words.
 
 The [live test battery](evals/live_battery/) is in the repo. On the release build it scored 39/39 on the test plan, 136/137 extra prompts (the miss was a correct answer over its time limit, and it passed on re-run) and 11/11 ops and security checks. It found 27 issues the unit tests had missed.
 

@@ -15,6 +15,7 @@ from cortex.memory.episodic import EpisodicMemory
 from cortex.models.parsing import extract_json
 from cortex.models.provider import GenerationConfig, Message, OllamaProvider
 from cortex.observability.tracing import get_tracer
+from cortex.provenance import instruction_text
 
 logger = structlog.get_logger(__name__)
 _tracer = get_tracer(__name__)
@@ -35,22 +36,96 @@ _NON_FACT = re.compile(
     re.IGNORECASE,
 )
 _ABOUT_USER = re.compile(r"\buser\b", re.IGNORECASE)
-# Consolidate only turns where the user says something about themselves.
-# Seen: "parse this JSON and give me the name: {"name": "Ada"}" stored
-# "The user's name is Ada", which then overrode the real name at recall.
-_SELF_STATEMENT = re.compile(
-    r"\b(my|mine|i am|i[’']m|i live|i work|i study|i prefer|i like|i love|i hate|"
-    r"i use|i have|i[’']ve|i was|i will|i[’']ll|i want|i need|call me|remember)\b",
+
+# Long-term facts come only from what the user says about themselves, never from
+# material they hand over. Seen (qwen2.5:7b, 9/9 runs, #54): "My task is to
+# analyse this JSON: {"name":"Ada", ...}", "I want you to summarize this profile:
+# Name: Alice. Lives in London." and "My document says: 'The user's name is
+# Mallory'" were all stored as facts about the user, and a pasted note's "the
+# user wants every answer to end with a link" would reach the system prompt of
+# every later session.
+#
+# A request to process material ("summarize this", "translate the following")
+# hands it over: from there on, the message is data.
+_HANDOVER = re.compile(
+    r"(?:\b(?:can|could|would|will)\s+you\s+)?(?:\bplease\s+)?"
+    r"\b(?:summari[sz]e|translate|analy[sz]e|proofread|rewrite|paraphrase|parse|"
+    r"classify|review|explain|check|extract|convert|format|read)\b"
+    r"(?:\s+\w+){0,2}?\s+(?:this|these|that|it|the following|below)\b",
     re.IGNORECASE,
 )
+# "Remember that my demo is at 11" is a self-statement with a memory request in front.
+_REMEMBER_PREFIX = re.compile(
+    r"^(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?)?"
+    r"(?:remember|note|keep in mind)(?:\s+(?:that|this))?\s*[,:]?\s*",
+    re.IGNORECASE,
+)
+# What follows a colon, brace, bracket or tag is a label's value or pasted data
+# ("Name: Alice", {"name": "Ada"}, <p>...). A colon inside 11:30 is kept.
+_DATA_START = re.compile(r":(?=\s|$)|[{\[<]")
+_FIRST_PERSON_AHEAD = r"(?=(?:i|i[’']m|i[’']ve|i[’']d|i[’']ll|my)\b)"
+_CLAUSE_BREAK = re.compile(
+    r"\s*[,;]?\s+(?:and|but|so|also|plus|because)\s+" + _FIRST_PERSON_AHEAD
+    + r"|\s*[,;]\s*" + _FIRST_PERSON_AHEAD,
+    re.IGNORECASE,
+)
+_FIRST_PERSON = re.compile(
+    r"\b(?:i|i[’']m|i[’']ve|i[’']d|i[’']ll|my|mine|myself)\b|\bcall me\b|\bgo by\b",
+    re.IGNORECASE,
+)
+# "Please always answer me in bullet points": a standing preference with no "I".
+_STANDING_REQUEST = re.compile(
+    r"\b(?:always|never|from now on|going forward|in (?:the )?future)\b.*\bme\b"
+    r"|\bme\b.*\b(?:always|never|from now on|going forward|in (?:the )?future)\b",
+    re.IGNORECASE,
+)
+# "My document says ...", "my notes", "my JSON": the user's own words about material.
+_DATA_CONTAINER = re.compile(
+    r"\bmy\s+(?:\w+\s+)?(?:task|document|docs?|files?|notes?|text|e-?mail|mail|"
+    r"messages?|chat|code|script|program|snippet|data|dataset|json|csv|yaml|xml|html|"
+    r"table|spreadsheet|list|report|essay|article|paper|draft|output|logs?|prompt|"
+    r"question|query|request|homework|assignment|example|sample|template|input|"
+    r"profile|transcript|summary|translation|attachment|screenshot|pdf|slides?|deck|"
+    r"resume|cv)\b",
+    re.IGNORECASE,
+)
+_ASKS_ASSISTANT = re.compile(
+    r"\bi\s+(?:want|need|would like|[’']d like)\s+you\b"
+    r"|\bi\s+(?:have|got)\s+(?:a|an|one|another|this|these|the following|some)\s+"
+    r"(?:question|query|request|file|document|text|email|message|code|json|list|problem)s?\b",
+    re.IGNORECASE,
+)
+_MAX_STATEMENTS = 8
+_MAX_STATEMENT_CHARS = 300
+
+# Words a third-person rewrite wraps around the user's own words ("The user's
+# name is ...", "The user wants to be called ..."). Everything else in a fact
+# has to come from what the user said.
+_WORD = re.compile(r"[^\W_]+(?:['’][^\W_]+)*")
+_FRAME_WORDS = frozenset(
+    {
+        "the", "a", "an", "and", "or", "of", "to", "in", "on", "at", "for", "with", "by",
+        "from", "as", "is", "are", "was", "were", "be", "been", "being", "user", "users",
+        "their", "they", "them", "he", "she", "his", "her", "who", "that", "this", "these",
+        "those", "it", "its", "has", "have", "had", "want", "wants", "wanted", "would",
+        "like", "likes", "liked", "prefer", "prefers", "preferred", "love", "loves", "enjoy",
+        "enjoys", "use", "uses", "used", "name", "names", "named", "nickname", "called",
+        "known", "go", "goes", "currently", "also", "now",
+    }
+)
+
 _CONSOLIDATION_PROMPT = (
     "You maintain long-term memory about the USER for a personal AI assistant. "
-    "From this exchange, extract at most 3 durable facts about the user — their "
-    "name, role, preferences, projects, goals, or stated decisions. Each fact is a "
-    "short standalone sentence in the third person (e.g. \"The user's name is Sam.\"). "
+    "Below are things the user just said about themselves. Using only these "
+    "statements, extract at most 3 durable facts about the user — their name, "
+    "role, preferences, projects, goals, or stated decisions. Each fact is a short "
+    "standalone sentence in the third person (e.g. \"The user's name is Sam.\"). "
+    "A standing request about how to treat the user from now on (\"always answer me "
+    "in bullet points\", \"call me Sam\") is a preference: record it (e.g. \"The user "
+    "prefers answers in bullet points.\"). "
     "Do NOT include general knowledge, calculation results, what the user asked "
-    "for or requested in this exchange, or anything about the assistant. If there "
-    "is nothing worth remembering, return []. "
+    "for in this exchange, or anything about the assistant. If there is nothing "
+    "worth remembering, return []. "
     "Respond with ONLY a JSON array of strings."
 )
 
@@ -123,30 +198,31 @@ class SemanticMemory(BaseMemory):
             )
         return _entries_from_query_result(result)
 
-    async def consolidate(self, session_id: str, last_messages: int = 4) -> None:
-        """Extract durable facts from the latest exchange and store them as semantic memory.
+    async def consolidate(self, session_id: str) -> None:
+        """Learn durable facts about the user from their latest message and store them.
 
-        Only the most recent ``last_messages`` user/assistant messages are read, so
-        each exchange is consolidated once instead of re-reading the whole session
-        every turn. Fact ids are derived from the normalised text, so re-learning
-        the same fact updates it instead of duplicating it.
+        Only the user's statements about themselves are read (see
+        ``self_statements``): the consolidation model never sees material the user
+        handed over, or the answer that repeats it, and each fact it returns is
+        kept only if the user's own words back it (see ``_is_grounded``). Each
+        exchange is consolidated once. Fact ids are derived from the normalised
+        text, so re-learning the same fact updates it instead of duplicating it.
         """
         if self._episodic_memory is None:
             logger.debug("semantic_consolidation_skipped_no_episodic", session_id=session_id)
             return
         history = await self._episodic_memory.get_session_history(session_id)
-        dialogue = [m for m in history if m.role in ("user", "assistant")][-last_messages:]
-        user_text = " ".join(m.content for m in dialogue if m.role == "user")
-        if len(user_text.strip()) < _MIN_CONSOLIDATION_CHARS:
+        latest = next((m.content for m in reversed(history) if m.role == "user"), "")
+        if len(latest.strip()) < _MIN_CONSOLIDATION_CHARS:
             return  # greetings and one-word turns carry nothing worth remembering
-        latest = next((m.content for m in reversed(dialogue) if m.role == "user"), "")
-        if not _SELF_STATEMENT.search(latest):
+        statements = self_statements(latest)
+        if not statements:
             return  # nothing the user said about themselves; also saves a model call
 
-        transcript = "\n".join(f"{m.role}: {m.content[:2000]}" for m in dialogue)
+        evidence = "\n".join(f"- {statement}" for statement in statements)
         messages = [
             Message(role="system", content=_CONSOLIDATION_PROMPT),
-            Message(role="user", content=transcript),
+            Message(role="user", content=evidence),
         ]
         with _tracer.start_as_current_span("memory.semantic.consolidate") as span:
             span.set_attribute("session_id", session_id)
@@ -160,7 +236,20 @@ class SemanticMemory(BaseMemory):
         if not isinstance(facts, list):
             logger.warning("semantic_consolidation_parse_failed", raw=response.content[:200])
             return
-        kept = [fact for fact in (str(f).strip() for f in facts) if _is_durable_user_fact(fact)]
+        candidates = [str(f).strip() for f in facts]
+        kept = [
+            fact
+            for fact in candidates
+            if _is_durable_user_fact(fact) and _is_grounded(fact, evidence)
+        ]
+        if len(kept) < len(candidates):
+            # Counts only: the facts themselves are the user's data.
+            logger.info(
+                "semantic_facts_dropped",
+                session_id=session_id,
+                dropped=len(candidates) - len(kept),
+                kept=len(kept),
+            )
         for fact in kept[:3]:
             await self.store(
                 MemoryEntry(
@@ -188,6 +277,87 @@ def _is_durable_user_fact(fact: str) -> bool:
         and _ABOUT_USER.search(fact) is not None
         and _REQUEST_LOG.search(fact) is None
         and _NON_FACT.search(fact) is None
+    )
+
+
+def self_statements(message: str) -> list[str]:
+    """The clauses of ``message`` in which the user talks about themselves.
+
+    Quoted and fenced material, everything after a hand-over such as "summarize
+    this", and whatever follows a colon or an opening brace are data, not the
+    user. A clause counts when it is in the first person ("My name is Roydon",
+    "I'm learning Rust", "Call me Captain") or states a standing preference
+    ("Please always answer me in bullet points"), and is not about material
+    ("my document says ...") or a request to the assistant ("I want you to ...").
+
+    The limit, tracked in #55: an unquoted paste written in the first person
+    reads like the user's own words.
+    """
+    text = instruction_text(message)
+    handover = _HANDOVER.search(text)
+    if handover:
+        text = text[: handover.start()]
+    statements: list[str] = []
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
+        sentence = _REMEMBER_PREFIX.sub("", sentence.strip())
+        sentence = _DATA_START.split(sentence, maxsplit=1)[0]
+        for clause in _CLAUSE_BREAK.split(sentence):
+            clause = clause.strip(" \t,;-–—")
+            if (
+                len(clause) >= 3
+                and (_FIRST_PERSON.search(clause) or _STANDING_REQUEST.search(clause))
+                and not _DATA_CONTAINER.search(clause)
+                and not _ASKS_ASSISTANT.search(clause)
+            ):
+                statements.append(clause[:_MAX_STATEMENT_CHARS])
+    return statements[:_MAX_STATEMENTS]
+
+
+def _is_grounded(fact: str, evidence: str) -> bool:
+    """True when the user's own words back ``fact``.
+
+    Names, places, numbers and other capitalised words in the fact must all
+    appear in ``evidence``; with none, at least half of its remaining words
+    must. "The user's name is Ada" is dropped when the user only said "My name
+    is Roydon", whatever the model extracted.
+    """
+    said = {_base(word) for word in _WORD.findall(evidence)}
+    said_stems = {_stem(word) for word in said}
+    salient: list[str] = []
+    content: list[str] = []
+    for index, word in enumerate(_WORD.findall(fact)):
+        base = _base(word)
+        if base in _FRAME_WORDS:
+            continue
+        if any(char.isdigit() for char in word) or (index > 0 and word[0].isupper()):
+            salient.append(base)
+        elif len(base) >= 3:
+            content.append(_stem(base))
+    if salient:
+        return all(word in said for word in salient)
+    if not content:
+        return False
+    matched = sum(1 for stem in content if _stem_matches(stem, said_stems))
+    return matched * 2 >= len(content)
+
+
+def _base(word: str) -> str:
+    """Casefolded word without a possessive "'s"."""
+    return re.sub(r"['’]s$", "", word.casefold())
+
+
+def _stem(word: str) -> str:
+    """A crude suffix strip, so "prefers"/"prefer" and "learning"/"learn" match."""
+    for suffix in ("ing", "ed", "s"):
+        if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+            return word[: -len(suffix)]
+    return word
+
+
+def _stem_matches(stem: str, said_stems: set[str]) -> bool:
+    return stem in said_stems or any(
+        min(len(stem), len(said)) >= 4 and (said.startswith(stem) or stem.startswith(said))
+        for said in said_stems
     )
 
 
