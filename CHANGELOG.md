@@ -6,6 +6,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-10-02
+
+A security release. An outside review found that long-term memory learned "facts"
+from material the user handed over to be processed; this release closes that, and
+the reviewer's regression tests are now part of the suite.
+
+Tests: 264 → 318 on Linux CI, plus 25 security regression cases for open issues
+(#55–#57), marked `xfail` until they are fixed. The battery's 13 memory and context
+cases pass end to end.
+
+**Upgrading:** run `git pull`, then `pip install -e .`. There are no new dependencies.
+Memory stored by earlier versions is kept. To see what CORTEX remembers about you,
+search memory in the UI. If it holds something you never said, such as a name from
+a document you asked it to summarise, run `cortex reset-memory --yes`. That clears
+all stored memory, chat history included.
+
 ### Security
 
 - Long-term memory learns only from what the user says about themselves (#54).
@@ -29,6 +45,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - "Remember that my demo is at 11 AM on Friday" and standing preferences such as
   "Please always answer me in bullet points" are remembered (0 of 3 runs each before).
+- `cortex.__version__` reports the installed version. It had said 0.1.0 since the
+  first release.
+
+### Added
+
+- `tests/security/`: 29 security regression cases from an outside review (#59, by
+  Mustafa ERBAY). The cases for open issues are strict `xfail`, so a fix that closes
+  a gap makes the test run say so.
 
 ### Changed
 

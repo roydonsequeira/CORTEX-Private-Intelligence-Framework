@@ -84,3 +84,10 @@ three re-runs in 8 to 10 s. Targeted tests alongside it found two ways for text
 the model reads to send data out that no battery case covered: an image in an
 answer, and a `web_fetch` of an address planted in a file. Both are closed in
 code and pinned by unit tests (see `CHANGELOG.md`, 1.2.1).
+
+1.2.2 changed only long-term memory, so its check was the memory and context
+cases: 24, 25 and 29 in the plan and H01–H10 in the extra prompts all passed end
+to end. Afterwards the store held exactly the seven facts those conversations
+stated. A direct check of 13 memory cases, 3 runs each, went from 24/39 to 39/39,
+with nothing learned from the documents and data in the prompts (see
+`CHANGELOG.md`, 1.2.2).
