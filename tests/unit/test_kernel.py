@@ -1126,3 +1126,21 @@ def test_test_it_counts_as_a_run_request() -> None:
     assert _planned_tools(
         ["Run the code with python_exec"], ["python_exec"], "test it with [1, 3, 5] and [2, 4, 6]"
     ) == ["python_exec"]
+
+
+def test_tools_chosen_by_outside_text_are_not_learned() -> None:
+    """After a file, page or document is read, only tools the user asked for count (#56)."""
+    from cortex.agent.kernel import _chosen_by_outside_text
+
+    assert _chosen_by_outside_text(["filesystem", "python_exec"], "Summarize notes.md")
+    assert _chosen_by_outside_text(["web_fetch", "calculator"], "Fetch https://example.com")
+    assert _chosen_by_outside_text(["doc_search", "my_plugin"], "Search the docs for limits")
+    assert not _chosen_by_outside_text(
+        ["filesystem", "python_exec"], "Read notes.md and use Python to count its words"
+    )
+    assert not _chosen_by_outside_text(
+        ["web_fetch", "filesystem"], "Fetch https://example.com and save it to page.md"
+    )
+    # Nothing outside was read before the second tool.
+    assert not _chosen_by_outside_text(["calculator", "filesystem"], "What is 2+2?")
+    assert not _chosen_by_outside_text(["filesystem"], "Summarize notes.md")
