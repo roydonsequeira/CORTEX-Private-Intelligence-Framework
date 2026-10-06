@@ -338,14 +338,14 @@ async def test_fetch_of_an_address_the_user_wrote_runs() -> None:
     kernel, router, registry = _make_kernel()
     router.complete.side_effect = [
         _mock_model_response('["Fetch the page"]'),
-        _mock_tool_call_response("web_fetch", {"url": "https://www.example.com/"}),
+        _mock_tool_call_response("web_fetch", {"url": "https://example.com/"}),
         _mock_model_response('{"progress": true}'),
         _mock_model_response("The page is a placeholder for examples."),
     ]
 
     await kernel.run("Fetch example.com and tell me what it says")
 
-    registry.execute.assert_awaited_once_with("web_fetch", url="https://www.example.com/")
+    registry.execute.assert_awaited_once_with("web_fetch", url="https://example.com/")
 
 
 def test_fetch_provenance_compares_path_and_query_exactly() -> None:
@@ -355,7 +355,6 @@ def test_fetch_provenance_compares_path_and_query_exactly() -> None:
     def refused(url: str, *user_texts: str) -> bool:
         return _is_unrequested_fetch("web_fetch", {"url": url}, list(user_texts))
 
-    assert not refused("http://example.com", "Read https://example.com.")
     assert not refused("https://example.com/a?b=1", "Fetch https://example.com/a?b=1", "Again")
     assert refused("https://example.com/a?b=2", "Fetch https://example.com/a?b=1")
     assert refused("https://example.com/Sam", "Fetch https://example.com")
@@ -363,6 +362,31 @@ def test_fetch_provenance_compares_path_and_query_exactly() -> None:
     # No host: web_fetch itself rejects these with a specific error.
     assert not refused("file:///etc/passwd", "Fetch file:///etc/passwd")
     assert not _is_unrequested_fetch("filesystem", {"path": "notes.md"}, ["Read notes.md"])
+
+
+def test_fetch_provenance_never_widens_what_the_user_wrote() -> None:
+    """http may become https, never the reverse, and the host stays as written (#58)."""
+    from cortex.agent.executor import _is_unrequested_fetch
+
+    def refused(url: str, *user_texts: str) -> bool:
+        return _is_unrequested_fetch("web_fetch", {"url": url}, list(user_texts))
+
+    assert refused("http://example.com", "Read https://example.com.")
+    assert refused("http://example.com/path", "Read https://www.example.com/path")
+    assert refused("https://example.com/path", "Read https://www.example.com/path")
+    assert refused("https://www.example.com/", "Fetch example.com")
+    assert refused("https://docs.example.com", "Fetch example.com")
+    assert not refused("https://example.com", "Read http://example.com")
+    assert not refused("http://example.com/docs/", "Read example.com/docs")
+    assert not refused("https://example.com/docs", "Read example.com/docs")
+    assert not refused("HTTPS://Example.com:443/docs#intro", "Read https://example.com/docs")
+    # web_fetch opens a bare host over https, so that is what gets compared.
+    assert not refused("example.com", "Read https://example.com")
+    assert refused("example.com", "Read http://example.org")
+    # A URL inside a query string is not the scheme of the address.
+    assert refused(
+        "http://example.com/go?to=https://x.test", "Read https://example.com/go?to=https://x.test"
+    )
 
 
 @pytest.mark.asyncio
