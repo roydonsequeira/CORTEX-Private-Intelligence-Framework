@@ -1,12 +1,12 @@
-"""Tests for the CORTEX config module."""
+"""Tests for the Quietpost config module."""
 
 from pathlib import Path
 
 import pytest
 import yaml
 
-from cortex.config import get_settings
-from cortex.config.settings import Settings  # noqa: F401
+from quietpost.config import get_settings
+from quietpost.config.settings import Settings  # noqa: F401
 
 
 def test_settings_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -20,9 +20,9 @@ def test_settings_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_settings_load_from_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Settings load values from cortex.yaml."""
+    """Settings load values from quietpost.yaml."""
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "cortex.yaml").write_text(
+    (tmp_path / "quietpost.yaml").write_text(
         yaml.dump({"ollama_model": "qwen2.5:14b", "api_port": 9000})
     )
     get_settings.cache_clear()
@@ -32,10 +32,10 @@ def test_settings_load_from_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
 
 def test_env_var_overrides_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Environment variables take precedence over cortex.yaml values."""
+    """Environment variables take precedence over quietpost.yaml values."""
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "cortex.yaml").write_text(yaml.dump({"api_port": 9000}))
-    monkeypatch.setenv("CORTEX_API_PORT", "7777")
+    (tmp_path / "quietpost.yaml").write_text(yaml.dump({"api_port": 9000}))
+    monkeypatch.setenv("QUIETPOST_API_PORT", "7777")
     get_settings.cache_clear()
     s = get_settings()
     assert s.api_port == 7777
@@ -44,8 +44,8 @@ def test_env_var_overrides_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 def test_settings_load_from_parent_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """cortex.yaml is discovered by walking up from a nested working directory."""
-    (tmp_path / "cortex.yaml").write_text(yaml.dump({"api_port": 9100}))
+    """quietpost.yaml is discovered by walking up from a nested working directory."""
+    (tmp_path / "quietpost.yaml").write_text(yaml.dump({"api_port": 9100}))
     nested = tmp_path / "a" / "b"
     nested.mkdir(parents=True)
     monkeypatch.chdir(nested)
@@ -57,15 +57,15 @@ def test_settings_load_from_parent_directory(
 def test_relative_yaml_paths_are_relative_to_the_config_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Starting CORTEX from a subfolder must not move its memory or workspace."""
+    """Starting Quietpost from a subfolder must not move its memory or workspace."""
     # conftest points these at tmp_path through env vars, which override the file.
-    monkeypatch.delenv("CORTEX_DB_PATH")
-    monkeypatch.delenv("CORTEX_CHROMA_PATH")
-    (tmp_path / "cortex.yaml").write_text(
+    monkeypatch.delenv("QUIETPOST_DB_PATH")
+    monkeypatch.delenv("QUIETPOST_CHROMA_PATH")
+    (tmp_path / "quietpost.yaml").write_text(
         yaml.dump(
             {
-                "db_path": "./.cortex/cortex.db",
-                "chroma_path": ".cortex/chroma",
+                "db_path": "./.quietpost/quietpost.db",
+                "chroma_path": ".quietpost/chroma",
                 "allowed_root": "./workspace",
                 "plugins_dir": "./plugins",
                 "task_db_path": str(tmp_path / "abs" / "tasks.db"),
@@ -77,8 +77,8 @@ def test_relative_yaml_paths_are_relative_to_the_config_file(
     monkeypatch.chdir(nested)
     get_settings.cache_clear()
     s = get_settings()
-    assert s.db_path == tmp_path / ".cortex" / "cortex.db"
-    assert s.chroma_path == tmp_path / ".cortex" / "chroma"
+    assert s.db_path == tmp_path / ".quietpost" / "quietpost.db"
+    assert s.chroma_path == tmp_path / ".quietpost" / "chroma"
     assert s.allowed_root == tmp_path / "workspace"
     assert s.plugins_dir == tmp_path / "plugins"
     assert s.task_db_path == tmp_path / "abs" / "tasks.db"  # absolute paths are kept
@@ -87,12 +87,12 @@ def test_relative_yaml_paths_are_relative_to_the_config_file(
 def test_yaml_paths_expand_the_home_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`~/cortex-data` means the home folder, not a directory literally named ~."""
-    monkeypatch.delenv("CORTEX_DB_PATH")
-    (tmp_path / "cortex.yaml").write_text(yaml.dump({"db_path": "~/cortex-data/cortex.db"}))
+    """`~/quietpost-data` means the home folder, not a directory literally named ~."""
+    monkeypatch.delenv("QUIETPOST_DB_PATH")
+    (tmp_path / "quietpost.yaml").write_text(yaml.dump({"db_path": "~/quietpost-data/quietpost.db"}))
     monkeypatch.chdir(tmp_path)
     get_settings.cache_clear()
-    assert get_settings().db_path == Path.home() / "cortex-data" / "cortex.db"
+    assert get_settings().db_path == Path.home() / "quietpost-data" / "quietpost.db"
 
 
 def test_default_workspace_is_a_dedicated_folder(
@@ -104,16 +104,16 @@ def test_default_workspace_is_a_dedicated_folder(
     assert get_settings().allowed_root == Path("workspace")
 
 
-def test_settings_load_from_cortex_config_env_var(
+def test_settings_load_from_quietpost_config_env_var(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CORTEX_CONFIG points the loader at an explicit config file anywhere."""
+    """QUIETPOST_CONFIG points the loader at an explicit config file anywhere."""
     config_file = tmp_path / "custom-config.yaml"
     config_file.write_text(yaml.dump({"api_port": 9200}))
     work_dir = tmp_path / "elsewhere"
     work_dir.mkdir()
     monkeypatch.chdir(work_dir)
-    monkeypatch.setenv("CORTEX_CONFIG", str(config_file))
+    monkeypatch.setenv("QUIETPOST_CONFIG", str(config_file))
     get_settings.cache_clear()
     s = get_settings()
     assert s.api_port == 9200
@@ -131,7 +131,84 @@ def test_invalid_log_level_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     from pydantic import ValidationError
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("CORTEX_LOG_LEVEL", "VERBOSE")
+    monkeypatch.setenv("QUIETPOST_LOG_LEVEL", "VERBOSE")
     get_settings.cache_clear()
     with pytest.raises(ValidationError):
         get_settings()
+
+
+def test_a_cortex_yaml_from_before_the_rename_is_still_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An upgrade from 1.x keeps working without renaming cortex.yaml."""
+    (tmp_path / "cortex.yaml").write_text(yaml.dump({"api_port": 9300}))
+    monkeypatch.chdir(tmp_path)
+    get_settings.cache_clear()
+    assert get_settings().api_port == 9300
+
+
+def test_quietpost_yaml_wins_over_cortex_yaml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "cortex.yaml").write_text(yaml.dump({"api_port": 9300}))
+    (tmp_path / "quietpost.yaml").write_text(yaml.dump({"api_port": 9400}))
+    monkeypatch.chdir(tmp_path)
+    get_settings.cache_clear()
+    assert get_settings().api_port == 9400
+
+
+def test_cortex_env_vars_from_before_the_rename_are_still_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CORTEX_* still works, below QUIETPOST_*; so does CORTEX_CONFIG."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CORTEX_API_PORT", "7001")
+    get_settings.cache_clear()
+    assert get_settings().api_port == 7001
+
+    monkeypatch.setenv("QUIETPOST_API_PORT", "7002")
+    get_settings.cache_clear()
+    assert get_settings().api_port == 7002
+
+    config_file = tmp_path / "old-config.yaml"
+    config_file.write_text(yaml.dump({"log_level": "DEBUG"}))
+    monkeypatch.setenv("CORTEX_CONFIG", str(config_file))
+    get_settings.cache_clear()
+    assert get_settings().log_level == "DEBUG"
+
+
+def test_data_from_before_the_rename_is_used_until_the_new_folder_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing is moved on upgrade: memory in .cortex/ keeps working where it is."""
+    monkeypatch.delenv("QUIETPOST_CHROMA_PATH")
+    monkeypatch.delenv("QUIETPOST_DB_PATH")
+    (tmp_path / "quietpost.yaml").write_text(
+        yaml.dump({"chroma_path": "./.quietpost/chroma", "db_path": "./.quietpost/quietpost.db"})
+    )
+    (tmp_path / ".cortex" / "chroma").mkdir(parents=True)
+    (tmp_path / ".cortex" / "cortex.db").write_bytes(b"")
+    monkeypatch.chdir(tmp_path)
+    get_settings.cache_clear()
+    settings = get_settings()
+    assert settings.chroma_path == tmp_path / ".cortex" / "chroma"
+    assert settings.db_path == tmp_path / ".cortex" / "cortex.db"
+
+    (tmp_path / ".quietpost" / "chroma").mkdir(parents=True)
+    (tmp_path / ".quietpost" / "quietpost.db").write_bytes(b"")
+    get_settings.cache_clear()
+    settings = get_settings()
+    assert settings.chroma_path == tmp_path / ".quietpost" / "chroma"
+    assert settings.db_path == tmp_path / ".quietpost" / "quietpost.db"
+
+
+def test_a_fresh_install_uses_the_new_data_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("QUIETPOST_CHROMA_PATH")
+    monkeypatch.delenv("QUIETPOST_DB_PATH")
+    monkeypatch.chdir(tmp_path)
+    get_settings.cache_clear()
+    settings = get_settings()
+    assert settings.chroma_path == Path(".quietpost/chroma")
+    assert settings.db_path == Path(".quietpost/quietpost.db")

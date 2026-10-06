@@ -1,6 +1,6 @@
-# Recording the CORTEX demo GIF
+# Recording the Quietpost demo GIF
 
-A short screen recording is the most reliable way to show CORTEX off — it always
+A short screen recording is the most reliable way to show Quietpost off — it always
 works, needs no hosting, and drops straight into the README. Aim for **under a minute**
 for the README GIF; a longer walkthrough works better as a linked MP4.
 

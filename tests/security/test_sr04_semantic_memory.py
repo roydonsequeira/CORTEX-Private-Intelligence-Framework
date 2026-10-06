@@ -14,10 +14,10 @@ from uuid import uuid4
 import chromadb
 import pytest
 
-from cortex.memory.base import MemoryEntry, MemoryQuery
-from cortex.memory.episodic import EpisodicMemory
-from cortex.memory.semantic import SemanticMemory
-from cortex.models.provider import ModelResponse, OllamaProvider
+from quietpost.memory.base import MemoryEntry, MemoryQuery
+from quietpost.memory.episodic import EpisodicMemory
+from quietpost.memory.semantic import SemanticMemory
+from quietpost.models.provider import ModelResponse, OllamaProvider
 
 CASES = {
     "SM-01 json": (
@@ -64,7 +64,7 @@ async def _consolidate(
             model="fake", input_tokens=1, output_tokens=1, latency_ms=1.0, raw={},
         )
     )
-    episodic = EpisodicMemory(tmp_path / "cortex.db")
+    episodic = EpisodicMemory(tmp_path / "quietpost.db")
     await episodic.initialize()
     await episodic.store(_entry(user, "s1", "user"))
     await episodic.store(_entry(assistant, "s1", "assistant"))

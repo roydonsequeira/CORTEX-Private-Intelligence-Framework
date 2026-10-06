@@ -88,7 +88,7 @@ export function MemoryPanel({ sessionId }: MemoryPanelProps) {
       <div className="flex items-center gap-2.5 border-b border-line px-5 py-4">
         <span className="h-2 w-2 rounded-full bg-signal" />
         <div>
-          <p className="font-mono text-[13px] font-semibold tracking-wide text-ink">CORTEX</p>
+          <p className="font-mono text-[13px] font-semibold tracking-wide text-ink">Quietpost</p>
           <p className="font-mono text-[11px] text-ink-faint">local agent · private</p>
         </div>
       </div>
@@ -153,7 +153,7 @@ export function MemoryPanel({ sessionId }: MemoryPanelProps) {
             <div className="mt-3 max-h-[50vh] space-y-2 overflow-y-auto">
               {current?.failed ? (
                 <p className="px-1 py-2 font-mono text-[12px] text-bad">
-                  Memory search failed. Is the CORTEX API running?
+                  Memory search failed. Is the Quietpost API running?
                 </p>
               ) : current && results.length === 0 ? (
                 <p className="px-1 py-2 font-mono text-[12px] text-ink-faint">No matches.</p>

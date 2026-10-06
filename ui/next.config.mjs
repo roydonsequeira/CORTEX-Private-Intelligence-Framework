@@ -1,8 +1,12 @@
-// The page may talk only to itself and the CORTEX API. Even if text the model
+// The page may talk only to itself and the Quietpost API. Even if text the model
 // read got markup into an answer, the browser would refuse to send anything
 // elsewhere: no requests to other hosts, no remote images, no form posts, no
 // plugins, and no other site can frame the UI.
-const apiOrigin = new URL(process.env.NEXT_PUBLIC_CORTEX_API_URL ?? "http://localhost:8000").origin;
+const apiUrl =
+  process.env.NEXT_PUBLIC_QUIETPOST_API_URL ??
+  process.env.NEXT_PUBLIC_CORTEX_API_URL ?? // the name from before the rename
+  "http://localhost:8000";
+const apiOrigin = new URL(apiUrl).origin;
 const isDev = process.env.NODE_ENV !== "production";
 
 const contentSecurityPolicy = [

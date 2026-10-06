@@ -1,6 +1,6 @@
 {
-  "name": "cortex-ui",
-  "version": "1.2.3",
+  "name": "quietpost-ui",
+  "version": "2.0.0-dev.0",
   "private": true,
   "scripts": {
     "dev": "next dev",

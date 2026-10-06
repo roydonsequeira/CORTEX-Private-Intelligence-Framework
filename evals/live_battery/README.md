@@ -1,6 +1,6 @@
 # Live test battery
 
-187 cases that drive a **running** CORTEX exactly like the UI does (Server-Sent
+187 cases that drive a **running** Quietpost exactly like the UI does (Server-Sent
 Events against a real Ollama model), from basic questions to prompt-injection
 attacks. The unit tests in `tests/` mock the model; this battery is how the bugs
 that only a real 7B model produces were found — a model that says "I saved the
@@ -11,26 +11,26 @@ invents a number when its code printed nothing.
 |---|---|---|
 | `battery_plan.py` | 39 | The six-level test plan: basics, single tools, writing code and "run it", memory, safety, multi-step |
 | `battery_extra.py` | 137 | General knowledge, maths, Python, code generation + follow-ups, files, RAG, web fetch, memory, safety, reasoning |
-| `battery_ops.py` | 11 | Ollama down, concurrent chats, `/chat/message`, a CPU-heavy snippet not blocking other chats, `cortex doctor`, CORS, Host check, debug endpoint, validation |
+| `battery_ops.py` | 11 | Ollama down, concurrent chats, `/chat/message`, a CPU-heavy snippet not blocking other chats, `quietpost doctor`, CORS, Host check, debug endpoint, validation |
 
 ## Run it on isolated data
 
 Always point the battery at a **separate** server with its own database, memory
 store and workspace, so test conversations, learned facts and files never touch
-your real `.cortex/` data.
+your real `.quietpost/` data.
 
 ```bash
 # terminal 1 — an isolated server on :8011 (bash; PowerShell: $env:NAME = "value")
-mkdir -p /tmp/cortex-eval/ws && cp README.md /tmp/cortex-eval/ws/
-CORTEX_DB_PATH=/tmp/cortex-eval/cortex.db \
-CORTEX_CHROMA_PATH=/tmp/cortex-eval/chroma \
-CORTEX_TASK_DB_PATH=/tmp/cortex-eval/tasks.db \
-CORTEX_ALLOWED_ROOT=/tmp/cortex-eval/ws \
-cortex serve --port 8011
+mkdir -p /tmp/quietpost-eval/ws && cp README.md /tmp/quietpost-eval/ws/
+QUIETPOST_DB_PATH=/tmp/quietpost-eval/quietpost.db \
+QUIETPOST_CHROMA_PATH=/tmp/quietpost-eval/chroma \
+QUIETPOST_TASK_DB_PATH=/tmp/quietpost-eval/tasks.db \
+QUIETPOST_ALLOWED_ROOT=/tmp/quietpost-eval/ws \
+quietpost serve --port 8011
 
 # terminal 2 — the battery
 cd evals/live_battery
-export CORTEX_EVAL_URL=http://127.0.0.1:8011 CORTEX_EVAL_WORKSPACE=/tmp/cortex-eval/ws
+export QUIETPOST_EVAL_URL=http://127.0.0.1:8011 QUIETPOST_EVAL_WORKSPACE=/tmp/quietpost-eval/ws
 python battery_plan.py      # ~15 min on an RTX 3060 6 GB
 python battery_extra.py     # ~35 min
 python battery_ops.py       # ~2 min; starts a second server on :8012 for test 40

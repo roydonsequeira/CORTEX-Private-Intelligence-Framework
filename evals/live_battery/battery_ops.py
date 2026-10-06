@@ -4,7 +4,7 @@
 - 41: two chats at the same moment -> both finish, no crossed answers
 - 42: POST /chat/message -> JSON answer + session id
 - 43: 9**9**9 in one chat does not block another chat
-- 44: `cortex doctor` passes, and names Ollama when it is unreachable
+- 44: `quietpost doctor` passes, and names Ollama when it is unreachable
 - S1-S6: CORS, Host check (DNS rebinding), debug tool endpoint off, tools listed, validation
 """
 
@@ -23,15 +23,15 @@ from harness import BASE, WORKSPACE, run_turn
 RESULTS: list[tuple[str, bool, str]] = []
 
 
-def cortex_command(*args: str) -> list[str]:
-    """The installed `cortex` CLI, or the same entry point via this Python."""
-    exe = shutil.which("cortex")
+def quietpost_command(*args: str) -> list[str]:
+    """The installed `quietpost` CLI, or the same entry point via this Python."""
+    exe = shutil.which("quietpost")
     if exe:
         return [exe, *args]
     return [
         sys.executable,
         "-c",
-        "import sys; from cortex.cli import main; sys.exit(main(sys.argv[1:]))",
+        "import sys; from quietpost.cli import main; sys.exit(main(sys.argv[1:]))",
         *args,
     ]
 
@@ -42,18 +42,18 @@ def record(name: str, ok: bool, detail: str) -> None:
 
 
 def test40_ollama_down() -> None:
-    data = Path(tempfile.mkdtemp(prefix="cortex-eval-40-"))
+    data = Path(tempfile.mkdtemp(prefix="quietpost-eval-40-"))
     env = {
         **os.environ,
-        "CORTEX_OLLAMA_BASE_URL": "http://127.0.0.1:9",  # nothing listens here
-        "CORTEX_WARMUP_ON_STARTUP": "false",
-        "CORTEX_DB_PATH": str(data / "cortex.db"),
-        "CORTEX_CHROMA_PATH": str(data / "chroma"),
-        "CORTEX_ALLOWED_ROOT": str(WORKSPACE),
+        "QUIETPOST_OLLAMA_BASE_URL": "http://127.0.0.1:9",  # nothing listens here
+        "QUIETPOST_WARMUP_ON_STARTUP": "false",
+        "QUIETPOST_DB_PATH": str(data / "quietpost.db"),
+        "QUIETPOST_CHROMA_PATH": str(data / "chroma"),
+        "QUIETPOST_ALLOWED_ROOT": str(WORKSPACE),
     }
     with open(data / "server.log", "w") as log:
         proc = subprocess.Popen(
-            cortex_command("serve", "--port", "8012"), env=env, stdout=log, stderr=subprocess.STDOUT
+            quietpost_command("serve", "--port", "8012"), env=env, stdout=log, stderr=subprocess.STDOUT
         )
     try:
         with httpx.Client(timeout=120) as client:
@@ -158,13 +158,13 @@ def test43_big_power_does_not_block() -> None:
 
 
 def test44_doctor() -> None:
-    env = {**os.environ, "CORTEX_API_PORT": "8013", "PYTHONIOENCODING": "utf-8"}
+    env = {**os.environ, "QUIETPOST_API_PORT": "8013", "PYTHONIOENCODING": "utf-8"}
     good = subprocess.run(
-        cortex_command("doctor"), env=env, capture_output=True, text=True, encoding="utf-8"
+        quietpost_command("doctor"), env=env, capture_output=True, text=True, encoding="utf-8"
     )
     bad = subprocess.run(
-        cortex_command("doctor"),
-        env={**env, "CORTEX_OLLAMA_BASE_URL": "http://127.0.0.1:9"},
+        quietpost_command("doctor"),
+        env={**env, "QUIETPOST_OLLAMA_BASE_URL": "http://127.0.0.1:9"},
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -172,7 +172,7 @@ def test44_doctor() -> None:
     good_ok = good.returncode == 0 and "[FAIL]" not in good.stdout
     bad_ok = bad.returncode != 0 and "[FAIL] Ollama" in bad.stdout
     record(
-        "44 cortex doctor",
+        "44 quietpost doctor",
         good_ok and bad_ok,
         f"good rc={good.returncode}; unreachable Ollama rc={bad.returncode}",
     )

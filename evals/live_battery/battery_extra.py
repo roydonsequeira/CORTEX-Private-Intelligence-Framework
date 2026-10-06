@@ -1,4 +1,4 @@
-"""137 extra prompts across every CORTEX capability, with automatic checks."""
+"""137 extra prompts across every Quietpost capability, with automatic checks."""
 
 import sys
 from datetime import date
@@ -137,7 +137,7 @@ CASES = [
     one(
         "A23 who are you",
         "Who are you and where do you run?",
-        any=["cortex"],
+        any=["quietpost"],
         notools=True,
         maxs=30,
     ),
@@ -185,7 +185,7 @@ CASES = [
     # C. Python execution
     one(
         "C01 reverse",
-        "Use Python to reverse the string 'CORTEX'",
+        "Use Python to reverse the string 'Quietpost'",
         req=["xetroc"],
         tools=["python_exec"],
         maxs=30,
@@ -529,7 +529,7 @@ CASES = [
     ),
     one(
         "E03 read summary",
-        "Read README.md and tell me what CORTEX is in one sentence",
+        "Read README.md and tell me what Quietpost is in one sentence",
         any=["agent", "private", "local"],
         tools=["filesystem"],
         maxs=45,
@@ -598,7 +598,7 @@ CASES = [
     # F. Document search
     one(
         "F01 index+search",
-        "Index the document README.md, then search it to tell me which memory tiers CORTEX has",
+        "Index the document README.md, then search it to tell me which memory tiers Quietpost has",
         req=["episodic", "semantic"],
         tools=["doc_search"],
         maxs=60,
@@ -612,7 +612,7 @@ CASES = [
     ),
     one(
         "F03 default model",
-        "According to the README, which model does CORTEX use by default?",
+        "According to the README, which model does Quietpost use by default?",
         req=["qwen2.5"],
         maxs=60,
     ),
@@ -641,7 +641,7 @@ CASES = [
     ),
     one(
         "G03 bad domain",
-        "Fetch https://this-domain-does-not-exist-cortex-12345.com",
+        "Fetch https://this-domain-does-not-exist-quietpost-12345.com",
         any=["could not", "couldn't", "unable", "failed", "error", "not", "can't"],
         maxs=45,
     ),

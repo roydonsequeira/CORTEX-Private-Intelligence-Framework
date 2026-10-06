@@ -1,6 +1,6 @@
-# Contributing to CORTEX
+# Contributing to Quietpost
 
-Thanks for helping improve CORTEX. This project aims to be a reference implementation for local, private AI agents, so contributions should be typed, tested, observable, and easy to review.
+Thanks for helping improve Quietpost. This project aims to be a reference implementation for local, private AI agents, so contributions should be typed, tested, observable, and easy to review.
 
 ## Development Setup
 
@@ -13,8 +13,8 @@ pip install -e ".[dev]"
 pip install pre-commit && pre-commit install   # optional: ruff and mypy on commit
 
 ollama pull qwen2.5:7b && ollama pull nomic-embed-text
-cortex doctor                        # verify the setup
-cortex serve                         # API on http://localhost:8000
+quietpost doctor                        # verify the setup
+quietpost serve                         # API on http://localhost:8000
 cd ui && npm install && npm run dev  # UI on http://localhost:3000
 ```
 
@@ -47,14 +47,14 @@ cd ui && npm run lint && npm run typecheck && npm run build
 
 ## Tool Plugins
 
-Tool plugins live under `src/cortex/tools/plugins/`. A plugin should:
+Tool plugins live under `src/quietpost/tools/plugins/`. A plugin should:
 
 - Inherit from `BaseTool`.
 - Define a `ToolSchema` with a JSON Schema `parameters` object.
 - Return `ToolResult` from `execute()`.
 - Avoid unsafe file, network, subprocess, or eval behavior unless intentionally sandboxed.
 
-See `src/cortex/tools/plugins/README.md` and `calculator.py` for examples.
+See `src/quietpost/tools/plugins/README.md` and `calculator.py` for examples.
 
 ## Architecture Decisions
 

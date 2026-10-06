@@ -6,6 +6,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **CORTEX is now Quietpost.** The package, the command, the config file and the
+  environment variables are renamed:
+  - `pip install quietpost`, and `quietpost serve`, `quietpost doctor` and
+    `quietpost reset-memory`;
+  - `quietpost.yaml`, the `QUIETPOST_*` environment variables, and
+    `NEXT_PUBLIC_QUIETPOST_API_URL` for the UI;
+  - new data goes in `.quietpost/`.
+
+  **Upgrading from 1.x needs no changes.** A `cortex.yaml`, `CORTEX_*` variables
+  (including `CORTEX_CONFIG`) and `NEXT_PUBLIC_CORTEX_API_URL` are still read, the
+  new names win when both are set, and memory in `.cortex/` keeps working where it
+  is until a `.quietpost/` folder exists. Nothing is moved or copied.
+
+  With Docker, the data volume is now `quietpost_data`. To bring 1.x memory
+  across once, before the first `docker compose up`:
+  `docker run --rm -v infra_cortex_data:/from -v infra_quietpost_data:/to alpine cp -a /from/. /to/`.
+
 ## [1.2.3] - 2026-10-06
 
 A hardening release. It closes the last four issues from the outside security

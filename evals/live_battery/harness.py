@@ -1,4 +1,4 @@
-"""Drive a live CORTEX API exactly like the UI does (SSE) and check each answer.
+"""Drive a live Quietpost API exactly like the UI does (SSE) and check each answer.
 
 Run against an isolated server so test conversations, facts and files never
 touch your real memory or workspace (see README.md in this folder).
@@ -13,9 +13,9 @@ from typing import Any
 
 import httpx
 
-BASE = os.environ.get("CORTEX_EVAL_URL", "http://127.0.0.1:8011")
-# The isolated server's CORTEX_ALLOWED_ROOT; used to check a file was NOT written.
-WORKSPACE = Path(os.environ.get("CORTEX_EVAL_WORKSPACE", "eval-workspace"))
+BASE = os.environ.get("QUIETPOST_EVAL_URL", "http://127.0.0.1:8011")
+# The isolated server's QUIETPOST_ALLOWED_ROOT; used to check a file was NOT written.
+WORKSPACE = Path(os.environ.get("QUIETPOST_EVAL_WORKSPACE", "eval-workspace"))
 
 
 def run_turn(client: httpx.Client, prompt: str, session_id: str | None) -> dict[str, Any]:

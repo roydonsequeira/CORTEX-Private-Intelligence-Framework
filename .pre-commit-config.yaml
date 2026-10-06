@@ -1,10 +1,10 @@
-# Pre-commit hooks for CORTEX. Install with:
+# Pre-commit hooks for Quietpost. Install with:
 #   pip install pre-commit && pre-commit install
 # Run against everything with:
 #   pre-commit run --all-files
 #
 # ruff and mypy run from your dev environment (pip install -e ".[dev]"), so they
-# use the same versions as CI, and mypy can see CORTEX's installed dependencies.
+# use the same versions as CI, and mypy can see Quietpost's installed dependencies.
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0

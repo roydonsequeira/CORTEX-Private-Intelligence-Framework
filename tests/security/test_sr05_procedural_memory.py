@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from cortex.memory.procedural import ToolPattern
+from quietpost.memory.procedural import ToolPattern
 from tests.security._helpers import model_text, model_tool_call, ok, scripted_kernel
 
 READ = {"action": "read_file", "path": "notes.md"}

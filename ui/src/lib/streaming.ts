@@ -72,7 +72,7 @@ export function useAgentStream(initialSessionId: string | null = null): StreamSt
         });
         if (!finished) {
           throw new Error(
-            "The connection to CORTEX closed before the answer finished. " +
+            "The connection to Quietpost closed before the answer finished. " +
               "Check that the API is still running, then try again."
           );
         }
@@ -99,23 +99,23 @@ function describeFailure(exc: Error, received: boolean): string {
     return exc.message;
   }
   return received
-    ? "The connection to CORTEX was lost before the answer finished. Try again."
-    : `Can't reach the CORTEX API at ${API_URL}. Is "cortex serve" running?`;
+    ? "The connection to Quietpost was lost before the answer finished. Try again."
+    : `Can't reach the Quietpost API at ${API_URL}. Is "quietpost serve" running?`;
 }
 
 function httpErrorMessage(status: number): string {
   switch (status) {
     case 422:
-      return "CORTEX could not accept that message: it must be 1 to 8,192 characters.";
+      return "Quietpost could not accept that message: it must be 1 to 8,192 characters.";
     case 429:
       return "Too many requests. Wait a few seconds and try again.";
     case 401:
     case 403:
-      return "The CORTEX API refused the request (API key or origin not allowed).";
+      return "The Quietpost API refused the request (API key or origin not allowed).";
     case 503:
-      return "CORTEX is busy or restarting. Try again in a moment.";
+      return "Quietpost is busy or restarting. Try again in a moment.";
     default:
-      return `The CORTEX API returned an error (HTTP ${status}).`;
+      return `The Quietpost API returned an error (HTTP ${status}).`;
   }
 }
 

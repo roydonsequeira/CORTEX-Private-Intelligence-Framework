@@ -1,6 +1,6 @@
-# CORTEX — Private Intelligence Framework
+# Quietpost
 
-> "Intelligence that stays yours."
+> Formerly CORTEX. Version 2, in progress on this branch, turns it into a private AI chief of staff for your inbox. Until then this page describes the agent framework it is built on.
 
 **A private AI agent that runs entirely on your own machine** — it plans, uses sandboxed tools, remembers you across sessions, and streams every step live, on a laptop GPU with 6 GB of VRAM. No cloud, no API keys, and your chats, files and memory never leave your computer.
 
@@ -12,23 +12,23 @@
 ![FastAPI](https://img.shields.io/badge/API-FastAPI-009688)
 ![Next.js](https://img.shields.io/badge/UI-Next.js-black)
 
-![CORTEX answering questions, running sandboxed Python, saving a file, remembering the user after a page refresh, refusing a prompt injection and blocking a localhost fetch](docs/assets/demo.gif)
+![The agent (recorded as CORTEX) answering questions, running sandboxed Python, saving a file, remembering the user after a page refresh, refusing a prompt injection and blocking a localhost fetch](docs/assets/demo.gif)
 
 *Recorded live on a 6 GB laptop GPU with `qwen2.5:7b` (model thinking time sped up): a direct answer, sandboxed Python, a saved file, memory across a page refresh, a refused "delete every file" injection, a question about the README, a web fetch, a blocked request to localhost, and a multi-step calculation.*
 
-## What is CORTEX?
+## What is Quietpost?
 
 Cloud AI is powerful, but everything you send to it can be logged, retained, inspected, or used to train future models. Prompts, files, private notes, source code, and research questions leave your machine and enter systems you do not control.
 
-CORTEX is a fully local, privacy-first AI agent framework that runs on your own hardware. It combines Ollama models, a production FastAPI runtime, a Next.js operator UI, four-tier memory, sandboxed tools, LATS reasoning, supervisor-worker orchestration, and OpenTelemetry observability without requiring cloud API keys.
+Quietpost is a fully local, privacy-first AI agent framework that runs on your own hardware. It combines Ollama models, a production FastAPI runtime, a Next.js operator UI, four-tier memory, sandboxed tools, LATS reasoning, supervisor-worker orchestration, and OpenTelemetry observability without requiring cloud API keys.
 
 ## Built for small models: rules enforced in code, not prompts
 
-Small local models break rules that prompts ask them to follow. Driving CORTEX with 187 real conversations against `qwen2.5:7b` showed exactly how: it claimed "I saved the file" without saving it, pasted a program again instead of saying it can't run, invented a number when its code printed nothing, stored "your name is Ada" from a JSON example, and followed an instruction hidden inside text it was asked to summarise. So the guardrails live in the agent code, where the model can't talk its way around them:
+Small local models break rules that prompts ask them to follow. Driving Quietpost with 187 real conversations against `qwen2.5:7b` showed exactly how: it claimed "I saved the file" without saving it, pasted a program again instead of saying it can't run, invented a number when its code printed nothing, stored "your name is Ada" from a JSON example, and followed an instruction hidden inside text it was asked to summarise. So the guardrails live in the agent code, where the model can't talk its way around them:
 
 - **No tools for answers that don't need them** — a direct-answer or refusal plan runs with no tool schemas at all; destructive plans become a refusal before anything runs.
 - **Pasted text can't ask for a file write** — a "save this to …" inside text you quote, fence, blockquote or paste after a request like "summarize this:" never counts as you asking to write or overwrite a file. The limit: a paste with no quoting and no request in front of it reads like your own words.
-- **Skipped or faked tool use is recovered** — if the plan and the user both call for a tool and the model answers without it, CORTEX runs the code the model wrote or asks for the tool, once.
+- **Skipped or faked tool use is recovered** — if the plan and the user both call for a tool and the model answers without it, Quietpost runs the code the model wrote or asks for the tool, once.
 - **"Run it" on a game or GUI program** gets an instant, honest answer (no window or keyboard in the sandbox, plus the local run command) instead of a repasted program.
 - **Web fetch opens only addresses you wrote, on public sites only** — a URL planted in a file or page (which could carry your data out in its path or query) is refused, and loopback, private-network and cloud-metadata addresses are refused after DNS resolution and on every redirect.
 - **Answers never load images** — the UI shows an image in an answer as a link, so an injected `![](https://…?data)` can't send anything out when the answer appears.
@@ -69,10 +69,10 @@ flowchart TB
 - **LATS-augmented ReAct:** Language Agent Tree Search for hard tasks where a linear loop stalls.
 - **Supervisor-worker orchestration:** decomposes complex jobs into parallel sub-agent runs and aggregates results.
 - **Sandboxed tool execution:** RestrictedPython code execution, filesystem guardrails, web fetching, document indexing.
-- **Plugin-first tools:** drop a `BaseTool` subclass into `src/cortex/tools/plugins/` and restart.
+- **Plugin-first tools:** drop a `BaseTool` subclass into `src/quietpost/tools/plugins/` and restart.
 - **Streaming API:** Server-Sent Events for plans, steps, tool calls, tokens, and completion events.
 - **Operator UI:** terminal-inspired Next.js interface with memory search and execution trace panel.
-- **OpenTelemetry tracing (opt-in):** FastAPI, model calls, tools, memory, and agent spans exported to Jaeger — on in the Docker stack, off in the shipped `cortex.yaml` for native runs.
+- **OpenTelemetry tracing (opt-in):** FastAPI, model calls, tools, memory, and agent spans exported to Jaeger — on in the Docker stack, off in the shipped `quietpost.yaml` for native runs.
 - **Release hardening:** request IDs, token bucket rate limiting, graceful shutdown, strict typing, CI.
 
 ## Quick Start
@@ -90,13 +90,13 @@ python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -e .
 
-cortex doctor                      # checks Python, config, Ollama, models, port, HTTPS
-cortex serve                       # API on http://localhost:8000
+quietpost doctor                      # checks Python, config, Ollama, models, port, HTTPS
+quietpost serve                       # API on http://localhost:8000
 
 cd ui && npm install && npm run dev   # UI on http://localhost:3000 (second terminal)
 ```
 
-The agent reads and writes files only in `workspace/` (next to `cortex.yaml`), so put the documents you want it to work with there.
+The agent reads and writes files only in `workspace/` (next to `quietpost.yaml`), so put the documents you want it to work with there.
 
 ### Docker Compose (NVIDIA GPU)
 
@@ -125,15 +125,15 @@ make pull-models-demo
 
 Same URLs as above. Answers are weaker than the default 7B model — this shows the machinery (planning, streaming, tool calls, memory, tracing), not frontier-model quality. Warm the model with one query before presenting, since the first call loads it.
 
-### The `cortex` command
+### The `quietpost` command
 
-`cortex serve` runs uvicorn inside the environment CORTEX is installed in, so it cannot pick up another Python's `uvicorn` from `PATH` (which fails with `No module named 'cortex'`). It refuses to start on a busy port and warms the model in the background. `cortex doctor` checks the whole setup and prints the fix for anything wrong. `cortex reset-memory --yes` wipes stored memory for a clean start.
+`quietpost serve` runs uvicorn inside the environment Quietpost is installed in, so it cannot pick up another Python's `uvicorn` from `PATH` (which fails with `No module named 'quietpost'`). It refuses to start on a busy port and warms the model in the background. `quietpost doctor` checks the whole setup and prints the fix for anything wrong. `quietpost reset-memory --yes` wipes stored memory for a clean start.
 
-Telemetry export is off in the default `cortex.yaml` (no collector is running natively); the Docker stack turns it on for Jaeger. That is CORTEX's own tracing, which stays on your machine. Separately, Next.js sends anonymous usage statistics about its build tooling (never your prompts) to Vercel by default. The UI's Docker image turns this off; for native UI development, run `npx next telemetry disable` once in `ui/`.
+Telemetry export is off in the default `quietpost.yaml` (no collector is running natively); the Docker stack turns it on for Jaeger. That is Quietpost's own tracing, which stays on your machine. Separately, Next.js sends anonymous usage statistics about its build tooling (never your prompts) to Vercel by default. The UI's Docker image turns this off; for native UI development, run `npx next telemetry disable` once in `ui/`.
 
 ## Configuration
 
-All runtime configuration lives in `cortex.yaml` and can be overridden with `CORTEX_` environment variables. CORTEX finds `cortex.yaml` by walking up from the current working directory, so it works from any subdirectory; set `CORTEX_CONFIG` to point at an explicit config file.
+All runtime configuration lives in `quietpost.yaml` and can be overridden with `QUIETPOST_` environment variables. Quietpost finds `quietpost.yaml` by walking up from the current working directory, so it works from any subdirectory; set `QUIETPOST_CONFIG` to point at an explicit config file.
 
 | Key | Default | Description |
 |---|---|---|
@@ -145,11 +145,11 @@ All runtime configuration lives in `cortex.yaml` and can be overridden with `COR
 | `ollama_timeout_seconds` | `300` | Per-request Ollama timeout (covers a cold model load) |
 | `ollama_num_ctx` | `8192` | Context window pinned on every call |
 | `ollama_keep_alive` | `30m` | How long Ollama keeps the model loaded between requests |
-| `max_agent_steps` | `10` | ReAct step budget; at the limit CORTEX synthesizes a best-effort answer |
-| `max_run_seconds` | `120` | Wall-clock budget per request; past it CORTEX gives a best-effort answer |
+| `max_agent_steps` | `10` | ReAct step budget; at the limit Quietpost synthesizes a best-effort answer |
+| `max_run_seconds` | `120` | Wall-clock budget per request; past it Quietpost gives a best-effort answer |
 | `history_turns` | `6` | Prior turns of the session replayed into each request |
-| `chroma_path` | `./.cortex/chroma` | Local Chroma persistence path |
-| `db_path` | `./.cortex/cortex.db` | SQLite episodic memory path |
+| `chroma_path` | `./.quietpost/chroma` | Local Chroma persistence path |
+| `db_path` | `./.quietpost/quietpost.db` | SQLite episodic memory path |
 | `api_host` / `api_port` | `127.0.0.1` / `8000` | Bind address; loopback only by default |
 | `api_key` | `null` | When set, require `Authorization: Bearer <key>` on all routes except `/health` and docs |
 | `cors_origins` | `["http://localhost:3000", "http://127.0.0.1:3000"]` | Browser origins allowed to call the API (the local UI) |
@@ -157,8 +157,8 @@ All runtime configuration lives in `cortex.yaml` and can be overridden with `COR
 | `allowed_hosts` | `["localhost", "127.0.0.1"]` | Accepted `Host` names (blocks DNS rebinding); add your host name to expose the API, or `["*"]` to disable |
 | `debug_tool_endpoint` | `false` | Enable `POST /tools/{name}/execute`, which runs a tool directly, bypassing the agent |
 | `task_store` | `memory` | Task result backend: `memory` (lost on restart) or `sqlite` (durable) |
-| `task_db_path` | `./.cortex/tasks.db` | SQLite path for the durable task store |
-| `telemetry_enabled` | `true` (`false` in the shipped `cortex.yaml`) | Export OpenTelemetry traces/metrics; `false` runs without a collector and without export warnings |
+| `task_db_path` | `./.quietpost/tasks.db` | SQLite path for the durable task store |
+| `telemetry_enabled` | `true` (`false` in the shipped `quietpost.yaml`) | Export OpenTelemetry traces/metrics; `false` runs without a collector and without export warnings |
 | `otel_endpoint` | `http://localhost:4317` | OTLP gRPC endpoint |
 | `code_sandbox` | `restricted` | Code execution backend: `restricted` (in-process) or `container` (Docker isolation) |
 | `stream_tokens` | `true` | Stream final-answer tokens from Ollama as they generate |
@@ -180,7 +180,7 @@ Create plugins by inheriting from `BaseTool`, defining a JSON schema, and implem
 
 ```python
 from typing import ClassVar
-from cortex.tools.base import BaseTool, ToolResult, ToolSchema
+from quietpost.tools.base import BaseTool, ToolResult, ToolSchema
 
 class EchoTool(BaseTool):
     schema: ClassVar[ToolSchema] = ToolSchema(
@@ -203,23 +203,23 @@ class EchoTool(BaseTool):
         )
 ```
 
-Drop the file in `src/cortex/tools/plugins/` and restart CORTEX.
+Drop the file in `src/quietpost/tools/plugins/` and restart Quietpost.
 
 ## Security Model
 
-CORTEX is designed to run on hardware you control, and its guardrails are built for that threat model — chiefly to contain code the LLM generates when a prompt is malicious or injected.
+Quietpost is designed to run on hardware you control, and its guardrails are built for that threat model — chiefly to contain code the LLM generates when a prompt is malicious or injected.
 
-- **Network exposure** is closed by default: the API binds to `127.0.0.1`, accepts browser calls only from local origins (CORS; loopback on any port), and only under local host names (a `Host` check that blocks DNS-rebinding attacks from web pages). The Docker stack publishes every port on `127.0.0.1`. To expose CORTEX, set `api_key` and widen `api_host`, `allowed_hosts` and `cors_origins` deliberately; `cortex serve` warns if you bind beyond loopback without a key. Direct tool execution (`POST /tools/{name}/execute`) is disabled unless `debug_tool_endpoint` is set.
+- **Network exposure** is closed by default: the API binds to `127.0.0.1`, accepts browser calls only from local origins (CORS; loopback on any port), and only under local host names (a `Host` check that blocks DNS-rebinding attacks from web pages). The Docker stack publishes every port on `127.0.0.1`. To expose Quietpost, set `api_key` and widen `api_host`, `allowed_hosts` and `cors_origins` deliberately; `quietpost serve` warns if you bind beyond loopback without a key. Direct tool execution (`POST /tools/{name}/execute`) is disabled unless `debug_tool_endpoint` is set.
 
 - **Code execution** uses a pluggable sandbox backend selected by `code_sandbox`:
-  - `restricted` (default) — compiled with RestrictedPython and run in a separate spawned process with a hard timeout. The attribute guard blocks dunder access and any traversal that would return a module object, closing escapes such as `json → codecs → sys → sys.modules['os']`. Its `open()` is read-only and confined to the workspace: it follows the filesystem tool's path rules (no `..`, no absolute paths, symlinks resolved, no link swapped in after the check, 1 MB, text only), never opens hidden paths such as `.env`, `.git` or `.cortex`, and hands the snippet an in-memory copy rather than a file handle. This is a best-effort in-process sandbox, **not** a guarantee against a determined adversary.
-  - `container` — each snippet runs in an ephemeral Docker container with the network disabled, a read-only root filesystem, all Linux capabilities dropped, `no-new-privileges`, a tmpfs workdir, and CPU/memory/pid limits, so the OS process boundary is the real isolation layer. Use this for untrusted or multi-tenant workloads (`pip install 'cortex-agent[container]'`).
-- **Filesystem** access is confined to a dedicated workspace folder (`workspace/` next to `cortex.yaml`, set by `allowed_root`), so the agent can't read `cortex.yaml` or change CORTEX's own code. It rejects `..` traversal and absolute or system paths with a clear "access denied", enforces read/write size caps, and restricts writable extensions. Hidden paths (`.git`, `.venv`, `.env`, `.cortex`) are never read, listed, indexed or written. CORTEX's own package and plugins folder stay read-only even if you widen `allowed_root` over them, since a plugin written there would run unsandboxed on the next start. Writes never overwrite an existing file unless `overwrite: true` is passed, even if the file appears after the check. Files are opened so that another program on the machine can't redirect them: no folder on the path may have been swapped for a link since it was checked, and a file with a second name elsewhere (a hard link) is neither read nor replaced. There is no delete capability.
-- **Prompt injection** is handled with least privilege rather than prompt wording alone: destructive requests are refused, and when the plan is a direct answer or a refusal the model is given no tools at all; at most three tool calls run per step; content from files, documents and web pages is treated as untrusted data; and every tool call is schema-validated, time-limited and traced. A small model does follow instructions planted in what it reads, so the two ways such text could carry data out are closed in code: `web_fetch` opens only addresses you wrote (below), and the UI shows images in an answer as links instead of loading them. The UI's Content-Security-Policy backs this up in the browser: the page can connect only to itself and the CORTEX API, and loads no remote images.
-- **Web fetch** opens only web addresses you wrote in the conversation. A URL taken from a file, a document, a page or the model's own guess is refused, so injected text can't make CORTEX contact a site of its choosing or carry data out in a URL's path or query. The host must match as you wrote it, `http` may become `https` (never the reverse), and a trailing slash may differ. It reaches public hosts only: loopback, private-network, link-local (cloud metadata) and reserved addresses are refused after DNS resolution and again on every redirect hop, so a prompt or an injected page cannot use it to probe your machine or network. It honours `robots.txt`, verifies TLS against the operating system trust store, stops downloading at 2 MB (a link to a huge file can't fill memory), refuses binary files such as PDFs and images without downloading them, caps output size, and reports specific errors (HTTP status, timeout, offline).
+  - `restricted` (default) — compiled with RestrictedPython and run in a separate spawned process with a hard timeout. The attribute guard blocks dunder access and any traversal that would return a module object, closing escapes such as `json → codecs → sys → sys.modules['os']`. Its `open()` is read-only and confined to the workspace: it follows the filesystem tool's path rules (no `..`, no absolute paths, symlinks resolved, no link swapped in after the check, 1 MB, text only), never opens hidden paths such as `.env`, `.git` or `.quietpost`, and hands the snippet an in-memory copy rather than a file handle. This is a best-effort in-process sandbox, **not** a guarantee against a determined adversary.
+  - `container` — each snippet runs in an ephemeral Docker container with the network disabled, a read-only root filesystem, all Linux capabilities dropped, `no-new-privileges`, a tmpfs workdir, and CPU/memory/pid limits, so the OS process boundary is the real isolation layer. Use this for untrusted or multi-tenant workloads (`pip install 'quietpost[container]'`).
+- **Filesystem** access is confined to a dedicated workspace folder (`workspace/` next to `quietpost.yaml`, set by `allowed_root`), so the agent can't read `quietpost.yaml` or change Quietpost's own code. It rejects `..` traversal and absolute or system paths with a clear "access denied", enforces read/write size caps, and restricts writable extensions. Hidden paths (`.git`, `.venv`, `.env`, `.quietpost`) are never read, listed, indexed or written. Quietpost's own package and plugins folder stay read-only even if you widen `allowed_root` over them, since a plugin written there would run unsandboxed on the next start. Writes never overwrite an existing file unless `overwrite: true` is passed, even if the file appears after the check. Files are opened so that another program on the machine can't redirect them: no folder on the path may have been swapped for a link since it was checked, and a file with a second name elsewhere (a hard link) is neither read nor replaced. There is no delete capability.
+- **Prompt injection** is handled with least privilege rather than prompt wording alone: destructive requests are refused, and when the plan is a direct answer or a refusal the model is given no tools at all; at most three tool calls run per step; content from files, documents and web pages is treated as untrusted data; and every tool call is schema-validated, time-limited and traced. A small model does follow instructions planted in what it reads, so the two ways such text could carry data out are closed in code: `web_fetch` opens only addresses you wrote (below), and the UI shows images in an answer as links instead of loading them. The UI's Content-Security-Policy backs this up in the browser: the page can connect only to itself and the Quietpost API, and loads no remote images.
+- **Web fetch** opens only web addresses you wrote in the conversation. A URL taken from a file, a document, a page or the model's own guess is refused, so injected text can't make Quietpost contact a site of its choosing or carry data out in a URL's path or query. The host must match as you wrote it, `http` may become `https` (never the reverse), and a trailing slash may differ. It reaches public hosts only: loopback, private-network, link-local (cloud metadata) and reserved addresses are refused after DNS resolution and again on every redirect hop, so a prompt or an injected page cannot use it to probe your machine or network. It honours `robots.txt`, verifies TLS against the operating system trust store, stops downloading at 2 MB (a link to a huge file can't fill memory), refuses binary files such as PDFs and images without downloading them, caps output size, and reports specific errors (HTTP status, timeout, offline).
 - **Quoted and pasted text is data:** a "save this to …" inside text you quote, fence, blockquote or paste after a request like "summarize this:" never counts as you asking to write or overwrite a file, and procedural memory never learns a tool that a file or page asked for. A paste with no quoting and no request in front of it still reads like your own words; a file is overwritten only when you explicitly ask.
 - **Calculator** evaluates an expression tree without `eval` and bounds exponents and factorials, so an expression like `9**9**9` cannot stall the API.
-- **API** requests are validated with Pydantic, rate limited per IP with a token bucket, and refused while the server drains for graceful shutdown. Authentication is off by default for localhost; set `api_key` (e.g. via `CORTEX_API_KEY`) to require a bearer token on every route except `/health` and the docs, and narrow `cors_origins` before exposing the API beyond your machine. The bundled UI doesn't send a key, so it stops working once `api_key` is set; to use the UI remotely, put an authenticating reverse proxy in front of both instead.
+- **API** requests are validated with Pydantic, rate limited per IP with a token bucket, and refused while the server drains for graceful shutdown. Authentication is off by default for localhost; set `api_key` (e.g. via `QUIETPOST_API_KEY`) to require a bearer token on every route except `/health` and the docs, and narrow `cors_origins` before exposing the API beyond your machine. The bundled UI doesn't send a key, so it stops working once `api_key` is set; to use the UI remotely, put an authenticating reverse proxy in front of both instead.
 
 Report security issues privately via a GitHub security advisory rather than a public issue.
 
@@ -239,17 +239,17 @@ flowchart TD
 | Tier | Stored in | Holds |
 |---|---|---|
 | Working | process memory | scratchpad for the current request |
-| Episodic | SQLite, `.cortex/cortex.db` (table `episodes`) | every user message, tool result and answer, per session |
-| Semantic | ChromaDB, `.cortex/chroma` (collection `cortex_semantic`) | durable facts about the user and indexed document chunks, as embeddings |
-| Procedural | ChromaDB, `.cortex/chroma` (collection `cortex_procedural`) | tool sequences that solved past tasks, used as planner hints |
+| Episodic | SQLite, `.quietpost/quietpost.db` (table `episodes`) | every user message, tool result and answer, per session |
+| Semantic | ChromaDB, `.quietpost/chroma` (collection `cortex_semantic`) | durable facts about the user and indexed document chunks, as embeddings |
+| Procedural | ChromaDB, `.quietpost/chroma` (collection `cortex_procedural`) | tool sequences that solved past tasks, used as planner hints |
 
 Each request replays the session's recent exchanges from SQLite and retrieves relevant long-term facts from ChromaDB. After the answer, a background step extracts durable facts about the user — only from turns where you say something about yourself ("my name is…", "I prefer…"), so names inside data you paste are never learned as yours. A tool sequence is learned only if every tool used after reading a file, document or web page is one your request asked for. Facts are keyed by their content, so re-learning one updates it rather than duplicating it.
 
-Everything stays on disk under `.cortex/`. Inspect it with `GET /memory/sessions` and `GET /memory/search` (add `types=procedural` to see learned tool patterns), watch the server log for `procedural_pattern_saved`, `procedural_hints_used` and `working_memory_cleared`, and clear it all with `cortex reset-memory --yes`.
+Everything stays on disk under `.quietpost/`. Inspect it with `GET /memory/sessions` and `GET /memory/search` (add `types=procedural` to see learned tool patterns), watch the server log for `procedural_pattern_saved`, `procedural_hints_used` and `working_memory_cleared`, and clear it all with `quietpost reset-memory --yes`.
 
 ## Observability
 
-CORTEX exports OpenTelemetry spans for HTTP requests, agent planning/execution/reflection, Ollama calls, SQLite memory, Chroma memory, tool execution, LATS, supervisor workers, and web fetches, plus metrics for model latency and agent steps. Logs are structured JSON with a request ID on every line.
+Quietpost exports OpenTelemetry spans for HTTP requests, agent planning/execution/reflection, Ollama calls, SQLite memory, Chroma memory, tool execution, LATS, supervisor workers, and web fetches, plus metrics for model latency and agent steps. Logs are structured JSON with a request ID on every line.
 
 With the Docker stack, traces appear in Jaeger at `http://localhost:16686`. Running natively without a collector, set `telemetry_enabled: false`.
 
@@ -284,9 +284,9 @@ pytest -m ollama       # live tests against a running Ollama
 ruff check src tests && mypy src tests   # lint and strict type checking
 ```
 
-CI runs lint, tests, the UI build and the Docker build on every pull request. Each reliability bug found by running CORTEX against a live model has a regression test. `tests/security/` holds regression cases from an outside security review; all four issues it raised are fixed. A known gap is added there as a strict `xfail`, so the fix that closes it shows up in the test run.
+CI runs lint, tests, the UI build and the Docker build on every pull request. Each reliability bug found by running Quietpost against a live model has a regression test. `tests/security/` holds regression cases from an outside security review; all four issues it raised are fixed. A known gap is added there as a strict `xfail`, so the fix that closes it shows up in the test run.
 
-The [live test battery](evals/live_battery/) drives a running CORTEX like the UI does — 187 cases from basic questions to prompt-injection attacks — against an isolated database and workspace. It is how the bugs that only a real model produces were found.
+The [live test battery](evals/live_battery/) drives a running Quietpost like the UI does — 187 cases from basic questions to prompt-injection attacks — against an isolated database and workspace. It is how the bugs that only a real model produces were found.
 
 ## Roadmap
 

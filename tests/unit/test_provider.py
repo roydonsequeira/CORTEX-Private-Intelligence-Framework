@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from cortex.exceptions import CortexModelError
-from cortex.models.provider import Message, ModelResponse, OllamaProvider, ToolCall
+from quietpost.exceptions import QuietpostModelError
+from quietpost.models.provider import Message, ModelResponse, OllamaProvider, ToolCall
 
 
 class _FakeStreamResponse:
@@ -78,15 +78,15 @@ async def test_complete_returns_model_response(provider: OllamaProvider) -> None
 
 
 @pytest.mark.asyncio
-async def test_complete_raises_cortex_model_error_on_http_failure(
+async def test_complete_raises_quietpost_model_error_on_http_failure(
     provider: OllamaProvider,
 ) -> None:
-    """complete() wraps httpx.HTTPError in CortexModelError."""
+    """complete() wraps httpx.HTTPError in QuietpostModelError."""
     with patch.object(
         provider._client,
         "post",
         new=AsyncMock(side_effect=httpx.ConnectError("connection refused")),
-    ), pytest.raises(CortexModelError):
+    ), pytest.raises(QuietpostModelError):
         await provider.complete(
             model="llama3.1:8b",
             messages=[Message(role="user", content="Hi")],
@@ -348,7 +348,7 @@ async def test_missing_model_error_says_how_to_fix(provider: OllamaProvider) -> 
     mock_resp = MagicMock(spec=httpx.Response)
     mock_resp.raise_for_status = MagicMock(side_effect=error)
 
-    with patch.object(provider._client, "post", new=AsyncMock(return_value=mock_resp)),             pytest.raises(CortexModelError, match="ollama pull qwen2.5:7b"):
+    with patch.object(provider._client, "post", new=AsyncMock(return_value=mock_resp)),             pytest.raises(QuietpostModelError, match="ollama pull qwen2.5:7b"):
         await provider.complete("qwen2.5:7b", [Message(role="user", content="Hi")])
 
 
@@ -357,7 +357,7 @@ async def test_unreachable_ollama_error_says_how_to_fix(provider: OllamaProvider
     """A connection failure names the URL and how to start Ollama."""
     with patch.object(
         provider._client, "post", new=AsyncMock(side_effect=httpx.ConnectError("refused"))
-    ), pytest.raises(CortexModelError, match="ollama serve"):
+    ), pytest.raises(QuietpostModelError, match="ollama serve"):
         await provider.complete("qwen2.5:7b", [Message(role="user", content="Hi")])
 
 
@@ -367,7 +367,7 @@ async def test_stream_error_line_raises(provider: OllamaProvider) -> None:
     lines = [json.dumps({"error": "out of memory"})]
     with patch.object(
         provider._client, "stream", MagicMock(return_value=_FakeStreamContext(lines))
-    ), pytest.raises(CortexModelError, match="out of memory"):
+    ), pytest.raises(QuietpostModelError, match="out of memory"):
         async for _ in provider.stream_complete(
             model="qwen2.5:7b", messages=[Message(role="user", content="Hi")]
         ):

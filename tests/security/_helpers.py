@@ -4,13 +4,13 @@ import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from cortex.agent.kernel import AgentKernel
-from cortex.config.settings import Settings
-from cortex.memory.manager import MemoryManager
-from cortex.models.provider import ModelResponse
-from cortex.models.router import ModelRouter
-from cortex.tools.base import ToolResult
-from cortex.tools.registry import ToolRegistry
+from quietpost.agent.kernel import AgentKernel
+from quietpost.config.settings import Settings
+from quietpost.memory.manager import MemoryManager
+from quietpost.models.provider import ModelResponse
+from quietpost.models.router import ModelRouter
+from quietpost.tools.base import ToolResult
+from quietpost.tools.registry import ToolRegistry
 
 
 def model_text(content: str) -> ModelResponse:
@@ -69,7 +69,7 @@ def scripted_kernel(
 
     async def complete(_capability: Any, messages: Any, *_args: Any, **_kwargs: Any) -> Any:
         system = messages[0].content if messages else ""
-        if system.startswith("You are CORTEX"):
+        if system.startswith("You are Quietpost"):
             return replies.pop(0) if replies else model_text("Done.")
         if "progress evaluator" in system:
             return model_text('{"progress": true}')

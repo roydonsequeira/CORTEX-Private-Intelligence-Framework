@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a reproducible problem in CORTEX
+about: Report a reproducible problem in Quietpost
 title: "[Bug]: "
 labels: bug
 assignees: ""
@@ -27,7 +27,7 @@ What did you expect to happen?
 - Docker (if used):
 - Ollama version and model:
 
-Output of `cortex doctor`:
+Output of `quietpost doctor`:
 
 ```text
 (paste here)

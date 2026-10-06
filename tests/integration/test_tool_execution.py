@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from cortex.tools.builtin.code_exec import CodeExecutionTool
-from cortex.tools.builtin.filesystem import FileSystemTool
-from cortex.tools.registry import ToolRegistry
+from quietpost.tools.builtin.code_exec import CodeExecutionTool
+from quietpost.tools.builtin.filesystem import FileSystemTool
+from quietpost.tools.registry import ToolRegistry
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,6 @@
 """Unit tests for tolerant parsing of small-model structured output."""
 
-from cortex.models.parsing import extract_json, extract_string_list, strip_reasoning
+from quietpost.models.parsing import extract_json, extract_string_list, strip_reasoning
 
 
 def test_extract_json_handles_fences_and_prose() -> None:

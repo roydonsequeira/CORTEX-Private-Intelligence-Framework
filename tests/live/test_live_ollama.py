@@ -6,8 +6,8 @@ pyproject). Run them explicitly once Ollama is up with a small model pulled::
     ollama pull llama3.2:1b
     pytest -m ollama
 
-Override the model/host with CORTEX_TEST_MODEL, CORTEX_TEST_EMBED_MODEL, and
-CORTEX_OLLAMA_BASE_URL. Each test skips (rather than fails) when Ollama is
+Override the model/host with QUIETPOST_TEST_MODEL, QUIETPOST_TEST_EMBED_MODEL, and
+QUIETPOST_OLLAMA_BASE_URL. Each test skips (rather than fails) when Ollama is
 unreachable or the requested model is not present, so the suite stays honest.
 """
 
@@ -17,23 +17,23 @@ from pathlib import Path
 
 import pytest
 
-from cortex.agent.kernel import AgentKernel
-from cortex.config.settings import Settings
-from cortex.memory.episodic import EpisodicMemory
-from cortex.memory.manager import MemoryManager
-from cortex.memory.procedural import ProceduralMemory
-from cortex.memory.semantic import SemanticMemory
-from cortex.memory.working import WorkingMemory
-from cortex.models.provider import Message, OllamaProvider
-from cortex.models.router import ModelCapability, ModelRouter
-from cortex.tools.builtin import register_builtin_tools
-from cortex.tools.registry import ToolRegistry
+from quietpost.agent.kernel import AgentKernel
+from quietpost.config.settings import Settings
+from quietpost.memory.episodic import EpisodicMemory
+from quietpost.memory.manager import MemoryManager
+from quietpost.memory.procedural import ProceduralMemory
+from quietpost.memory.semantic import SemanticMemory
+from quietpost.memory.working import WorkingMemory
+from quietpost.models.provider import Message, OllamaProvider
+from quietpost.models.router import ModelCapability, ModelRouter
+from quietpost.tools.builtin import register_builtin_tools
+from quietpost.tools.registry import ToolRegistry
 
 pytestmark = pytest.mark.ollama
 
-_BASE_URL = os.environ.get("CORTEX_OLLAMA_BASE_URL", "http://localhost:11434")
-_MODEL = os.environ.get("CORTEX_TEST_MODEL", "llama3.2:1b")
-_EMBED_MODEL = os.environ.get("CORTEX_TEST_EMBED_MODEL", "nomic-embed-text")
+_BASE_URL = os.environ.get("QUIETPOST_OLLAMA_BASE_URL", "http://localhost:11434")
+_MODEL = os.environ.get("QUIETPOST_TEST_MODEL", "llama3.2:1b")
+_EMBED_MODEL = os.environ.get("QUIETPOST_TEST_EMBED_MODEL", "nomic-embed-text")
 
 
 @pytest.fixture()
@@ -57,7 +57,7 @@ def _test_settings(tmp_path: Path) -> Settings:
         ollama_model=_MODEL,
         embed_model=_EMBED_MODEL,
         chroma_path=tmp_path / "chroma",
-        db_path=tmp_path / "cortex.db",
+        db_path=tmp_path / "quietpost.db",
         max_agent_steps=6,
     )
 

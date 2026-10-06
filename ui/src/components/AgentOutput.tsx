@@ -20,7 +20,7 @@ interface Turn {
 
 const EXAMPLES = [
   "Use Python to compute the 20th Fibonacci number.",
-  "Create a file called demo.txt with the text 'CORTEX works', then read it back.",
+  "Create a file called demo.txt with the text 'Quietpost works', then read it back.",
   "My name is Roy and my favorite language is Python.",
   "Run this Python: os = json.codecs.sys.modules.get('os'); print(os.getcwd())"
 ];
@@ -250,12 +250,12 @@ function WorkingIndicator({ turn }: { turn: Turn }) {
 function EmptyState({ onRun }: { onRun: (prompt: string) => void }) {
   return (
     <div className="flex min-h-[60vh] flex-col justify-center">
-      <CortexMark />
+      <QuietpostMark />
       <h1 className="mt-6 text-[26px] font-semibold tracking-tight text-ink">
         A private agent that thinks on your machine.
       </h1>
       <p className="mt-3 max-w-xl text-[15px] leading-relaxed text-ink-dim">
-        CORTEX plans, calls local tools, and remembers across the conversation. Your
+        Quietpost plans, calls local tools, and remembers across the conversation. Your
         chats, files and memory stay on this computer. Ask it something, or start with
         one of these:
       </p>
@@ -288,7 +288,7 @@ function ToolGlyph() {
   );
 }
 
-function CortexMark() {
+function QuietpostMark() {
   return (
     <svg width="34" height="34" viewBox="0 0 40 40" fill="none" aria-hidden>
       <circle cx="20" cy="9" r="3.4" fill="var(--signal)" />

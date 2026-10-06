@@ -26,7 +26,8 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
-# CORTEX runtime data
+# Quietpost runtime data (.cortex/ is where it lived before the rename)
+.quietpost/
 .cortex/
 
 # The agent's files; workspace/README.md explains the folder.

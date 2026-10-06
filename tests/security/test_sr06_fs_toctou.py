@@ -16,9 +16,9 @@ from typing import Any
 
 import pytest
 
-from cortex.tools import sandbox as sandbox_module
-from cortex.tools.builtin import filesystem as fs_module
-from cortex.tools.builtin.filesystem import FileSystemTool
+from quietpost.tools import sandbox as sandbox_module
+from quietpost.tools.builtin import filesystem as fs_module
+from quietpost.tools.builtin.filesystem import FileSystemTool
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink/hardlink semantics")
 

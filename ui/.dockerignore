@@ -3,6 +3,6 @@ node_modules
 npm-debug.log
 Dockerfile
 .dockerignore
-.cortex
+.quietpost
 .env*
 next-env.d.ts

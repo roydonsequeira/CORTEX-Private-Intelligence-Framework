@@ -2,9 +2,9 @@
 
 from unittest.mock import MagicMock
 
-from cortex.config.settings import Settings
-from cortex.models.provider import OllamaProvider
-from cortex.models.router import ModelCapability, ModelRouter
+from quietpost.config.settings import Settings
+from quietpost.models.provider import OllamaProvider
+from quietpost.models.router import ModelCapability, ModelRouter
 
 
 def test_router_maps_every_capability_from_settings() -> None:

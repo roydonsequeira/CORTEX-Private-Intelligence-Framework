@@ -6,8 +6,8 @@ RUN npm ci
 FROM node:24-alpine AS builder
 WORKDIR /app
 # NEXT_PUBLIC_* values are inlined into the browser bundle at build time.
-ARG NEXT_PUBLIC_CORTEX_API_URL=http://localhost:8000
-ENV NEXT_PUBLIC_CORTEX_API_URL=$NEXT_PUBLIC_CORTEX_API_URL
+ARG NEXT_PUBLIC_QUIETPOST_API_URL=http://localhost:8000
+ENV NEXT_PUBLIC_QUIETPOST_API_URL=$NEXT_PUBLIC_QUIETPOST_API_URL
 # Next.js sends anonymous usage telemetry to Vercel by default; not from here.
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
