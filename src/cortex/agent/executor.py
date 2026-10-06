@@ -16,6 +16,7 @@ from cortex.models.router import ModelCapability, ModelRouter
 from cortex.observability.metrics import increment_agent_steps
 from cortex.observability.tracing import get_tracer
 from cortex.provenance import instruction_text as instruction_text
+from cortex.provenance import request_text
 from cortex.tools.base import ToolResult
 from cortex.tools.builtin.filesystem import infer_action
 from cortex.tools.builtin.web_fetch import normalise_url
@@ -448,7 +449,7 @@ def _is_unrequested_write(tool_name: str, kwargs: dict[str, Any], user_input: st
     return (
         tool_name == "filesystem"
         and infer_action(kwargs) == "write_file"
-        and not _FILE_INTENT.search(instruction_text(user_input))
+        and not _FILE_INTENT.search(request_text(user_input))
     )
 
 
@@ -490,7 +491,7 @@ def _is_unrequested_overwrite(tool_name: str, kwargs: dict[str, Any], user_input
         tool_name == "filesystem"
         and infer_action(kwargs) == "write_file"
         and kwargs.get("overwrite") in (True, "true", "True")
-        and not _OVERWRITE_INTENT.search(instruction_text(user_input))
+        and not _OVERWRITE_INTENT.search(request_text(user_input))
     )
 
 

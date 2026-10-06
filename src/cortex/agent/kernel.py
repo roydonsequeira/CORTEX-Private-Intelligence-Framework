@@ -21,7 +21,7 @@ from cortex.memory.manager import MemoryManager
 from cortex.models.provider import Message
 from cortex.models.router import ModelCapability, ModelRouter
 from cortex.observability.tracing import get_tracer
-from cortex.provenance import instruction_text
+from cortex.provenance import instruction_text, request_text
 from cortex.tools.base import ToolResult
 from cortex.tools.registry import ToolRegistry
 
@@ -197,7 +197,7 @@ class AgentKernel:
             plan = _refuse_unsupported_file_ops(plan)
             plan = _drop_unrequested_web_steps(plan, instruction)
             plan = _keep_code_requests_unrun(plan, instruction)
-            plan = _ensure_file_save_step(plan, instruction)
+            plan = _ensure_file_save_step(plan, request_text(state.user_input))
             state.plan = _honour_explicit_python(plan, instruction)
         except CortexModelError:
             raise  # Ollama itself is unavailable; the executor would fail the same way
