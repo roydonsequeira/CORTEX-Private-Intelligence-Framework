@@ -2,6 +2,7 @@
 
 import json
 import time
+from functools import partial
 from pathlib import Path
 
 import anyio
@@ -12,7 +13,9 @@ from cortex.tools.workspace import (
     check_readable_file,
     ensure_not_hidden,
     ensure_text,
+    read_workspace_file,
     resolve_workspace_path,
+    write_workspace_file,
 )
 
 _MAX_WRITE_BYTES = 524_288
@@ -120,9 +123,10 @@ class FileSystemTool(BaseTool):
 
     async def _read_file(self, path: Path) -> str:
         """Read a UTF-8 text file up to the maximum allowed size."""
-        check_readable_file(path, self._display(path))
-        raw = await anyio.Path(path).read_bytes()
-        ensure_text(raw, self._display(path))
+        display = self._display(path)
+        check_readable_file(path, display)
+        raw = await anyio.to_thread.run_sync(read_workspace_file, self._allowed_root, path, display)
+        ensure_text(raw, display)
         return raw.decode("utf-8", errors="replace")
 
     async def _write_file(self, path: Path, content: str, overwrite: bool = False) -> str:
@@ -140,18 +144,31 @@ class FileSystemTool(BaseTool):
                 f"Access denied: {relative} is inside CORTEX's own code or plugins "
                 "folder, which the agent cannot modify."
             )
+        exists = OSError(
+            f"{relative} already exists. It was not changed. Only set overwrite=true "
+            "if the user explicitly asked to replace this file."
+        )
         if path.exists() and not overwrite:
-            raise OSError(
-                f"{relative} already exists. It was not changed. Only set overwrite=true "
-                "if the user explicitly asked to replace this file."
-            )
+            raise exists
         if path.suffix not in self._allowed_extensions:
             allowed = ", ".join(sorted(self._allowed_extensions))
             raise OSError(f"Extension '{path.suffix}' is not allowed for writes (allowed: {allowed}).")
-        if len(content.encode("utf-8")) > _MAX_WRITE_BYTES:
+        data = content.encode("utf-8")
+        if len(data) > _MAX_WRITE_BYTES:
             raise OSError("Content exceeds 512KB write limit.")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        await anyio.Path(path).write_text(content, encoding="utf-8")
+        write = partial(
+            write_workspace_file,
+            self._allowed_root,
+            path,
+            data,
+            overwrite=overwrite,
+            display=self._display(path),
+        )
+        try:
+            await anyio.to_thread.run_sync(write)
+        except FileExistsError:
+            # Created by someone else after the check above.
+            raise exists from None
         return f"Wrote {len(content)} characters to {self._display(path)}"
 
     async def _list_directory(self, path: Path) -> str:
