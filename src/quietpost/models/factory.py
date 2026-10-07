@@ -25,4 +25,5 @@ async def create_provider(settings: Settings) -> ModelProvider:
         timeout=settings.model_timeout_seconds,
         num_ctx=settings.ollama_num_ctx,
         keep_alive=settings.ollama_keep_alive,
+        think=settings.ollama_think,
     )

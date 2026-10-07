@@ -148,6 +148,7 @@ All runtime configuration lives in `quietpost.yaml` and can be overridden with `
 | `model_timeout_seconds` | `300` | Per-request model timeout (covers a cold model load) |
 | `ollama_num_ctx` | `8192` | Ollama only: the context window pinned on every call |
 | `ollama_keep_alive` | `30m` | Ollama only: how long the model stays loaded between requests |
+| `ollama_think` | `false` | Ollama only: let a thinking model (qwen3, qwen3.5) reason before it answers. Much slower on a small GPU; a model that can't think rejects `true` |
 | `max_agent_steps` | `10` | ReAct step budget; at the limit Quietpost synthesizes a best-effort answer |
 | `max_run_seconds` | `120` | Wall-clock budget per request; past it Quietpost gives a best-effort answer |
 | `history_turns` | `6` | Prior turns of the session replayed into each request |

@@ -20,6 +20,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a time with a smaller model. The inbox audit will use it.
 - `GenerationConfig.json_schema` makes either kind of server reply with JSON that
   matches a schema.
+- `ollama_think` (off by default) turns a thinking model's reasoning on. With it
+  off, qwen3 and qwen3.5 answer in 1-2 seconds instead of 17-35 on a 6 GB GPU.
 
 ### Changed
 

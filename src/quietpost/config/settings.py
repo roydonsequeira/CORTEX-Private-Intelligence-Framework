@@ -172,6 +172,9 @@ class Settings(BaseSettings):
     ollama_num_ctx: int = 8192
     # Ollama only. How long it keeps the model resident after a request (its default is 5m).
     ollama_keep_alive: str = "30m"
+    # Ollama only. Thinking models (qwen3, qwen3.5) reason before every answer
+    # unless told not to: on a 6 GB GPU that took 17-35 s per call instead of 1-2 s.
+    ollama_think: bool = False
     # The 1.x names of model_server_url, chat_model and model_timeout_seconds.
     ollama_base_url: str | None = None
     ollama_model: str | None = None

@@ -176,6 +176,8 @@ class OllamaProvider:
     reloads the model whenever it changes, and its small default silently
     truncates long tool transcripts. ``keep_alive`` keeps the model resident
     between requests so a pause in a demo does not trigger a cold reload.
+    ``think`` turns a thinking model's reasoning on or off (None leaves Ollama's
+    default, which is on); a model that cannot think accepts False.
     """
 
     def __init__(
@@ -184,10 +186,12 @@ class OllamaProvider:
         timeout: float = 300.0,
         num_ctx: int | None = None,
         keep_alive: str | None = None,
+        think: bool | None = None,
     ) -> None:
         self._base_url = prefer_ipv4_loopback(base_url.rstrip("/"))
         self._num_ctx = num_ctx
         self._keep_alive = keep_alive
+        self._think = think
         # Models Ollama rejected with "does not support tools" (e.g. gemma3,
         # deepseek-r1). They are called without tools from then on, so the agent
         # still answers — directly — instead of failing every request.
@@ -231,6 +235,8 @@ class OllamaProvider:
         }
         if self._keep_alive:
             payload["keep_alive"] = self._keep_alive
+        if self._think is not None:
+            payload["think"] = self._think
         if tools:
             payload["tools"] = tools
         if cfg.json_schema:

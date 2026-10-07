@@ -362,6 +362,38 @@ async def test_json_schema_is_sent_as_ollama_format(provider: OllamaProvider) ->
     assert post_mock.await_args.kwargs["json"]["format"] == schema
 
 
+@pytest.mark.asyncio
+async def test_think_is_sent_only_when_set() -> None:
+    """Thinking models reason before every answer unless the request says think: false."""
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = _make_chat_response("ok")
+    payloads = []
+    for think in (False, None):
+        provider = OllamaProvider("http://fake-ollama:11434", think=think)
+        post_mock = AsyncMock(return_value=mock_resp)
+        with patch.object(provider._client, "post", new=post_mock):
+            await provider.complete("qwen3:8b", [Message(role="user", content="Hi")])
+        assert post_mock.await_args is not None
+        payloads.append(post_mock.await_args.kwargs["json"])
+
+    assert payloads[0]["think"] is False
+    assert "think" not in payloads[1]
+
+
+@pytest.mark.asyncio
+async def test_the_factory_turns_thinking_off_by_default() -> None:
+    from quietpost.config.settings import Settings
+    from quietpost.models.factory import create_provider
+
+    provider = await create_provider(Settings())
+    try:
+        assert isinstance(provider, OllamaProvider)
+        assert provider._think is False
+    finally:
+        await provider.aclose()
+
+
 def test_model_requests_ignore_proxy_environment_variables() -> None:
     """Prompts go straight to Ollama, never through an HTTP(S)_PROXY from the environment."""
     assert OllamaProvider("http://127.0.0.1:11434")._client.trust_env is False
