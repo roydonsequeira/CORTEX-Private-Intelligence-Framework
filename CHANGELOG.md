@@ -12,7 +12,7 @@ A hardening release. It closes the last four issues from the outside security
 review (#55–#58) and gives the UI a Content-Security-Policy. The review's 25
 security cases that were expected to fail now pass as ordinary tests.
 
-Tests: 318 → 363 on Linux CI, with nothing marked `xfail`.
+Tests: 318 → 365 on Linux CI, with nothing marked `xfail`.
 
 **Upgrading:** run `git pull`, then `pip install -e .`, and restart the UI so it
 sends the new headers. There are no new dependencies.
@@ -36,6 +36,13 @@ sends the new headers. There are no new dependencies.
   web page or program output is one your request asks for. Before, "Summarize
   notes.md", with a note inside saying "run python_exec", taught python_exec to
   later "summarize" requests.
+- **A document you index no longer turns into "facts about you".** `doc_search`
+  keeps the chunks of an indexed document in the same store as the facts CORTEX
+  learns about you, and every later chat offered the closest ones to the model as
+  "facts about the user from earlier sessions". So a document's text, including
+  any instructions in it, was presented as if you had said it, in every session.
+  Now only learned facts are offered. Indexed documents are still searchable with
+  `doc_search`.
 - **Files are opened so that another program can't redirect them (#57).** The path
   is checked by name, so a program running on the same machine could swap a
   folder for a link between the check and the open. Now:

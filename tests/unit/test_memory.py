@@ -155,6 +155,24 @@ async def test_memory_manager_retrieve_context_dedupes(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_retrieve_facts_leaves_out_document_chunks(tmp_path: Path) -> None:
+    """Chunks of indexed documents share the collection but are not facts about the user."""
+    semantic = SemanticMemory(
+        tmp_path / "chroma", "nomic-embed-text", _mock_provider(), client=chromadb.EphemeralClient()
+    )
+    for index, path in enumerate(["/ws/a.md", "/ws/a.md", "/ws/b.md"]):
+        await semantic.store(
+            _entry(f"chunk {index}", "semantic", source_path=path, chunk_index=index % 2)
+        )
+    assert await semantic.retrieve_facts(MemoryQuery(text="anything", top_k=5)) == []
+
+    await semantic.store(_entry("The user lives in Pune.", "semantic", source_session="s1"))
+    facts = await semantic.retrieve_facts(MemoryQuery(text="anything", top_k=5))
+
+    assert [entry.content for entry in facts] == ["The user lives in Pune."]
+
+
+@pytest.mark.asyncio
 async def test_semantic_and_procedural_share_one_chroma_client(tmp_path: Path) -> None:
     """Two PersistentClients on one path corrupt each other's HNSW view (chromadb 1.5
     raises "Nothing found on disk"); both tiers must reuse a single client."""

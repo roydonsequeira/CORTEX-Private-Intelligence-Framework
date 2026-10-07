@@ -198,6 +198,37 @@ class SemanticMemory(BaseMemory):
             )
         return _entries_from_query_result(result)
 
+    async def retrieve_facts(self, query: MemoryQuery) -> list[MemoryEntry]:
+        """Like retrieve, but only facts about the user, never document chunks.
+
+        doc_search keeps the chunks of indexed documents in this collection too,
+        marked with ``source_path`` and ``chunk_index``. A chunk is the
+        document's text, not something the user said, so it must not reach the
+        model as a fact about them.
+        """
+        await self.initialize()
+        assert self._collection is not None
+        chunks = self._collection.get(where={"chunk_index": {"$gte": 0}}, include=["metadatas"])
+        facts = self._collection.count() - len(chunks["ids"])
+        if facts <= 0:
+            return []
+        paths = sorted(
+            {str(meta["source_path"]) for meta in chunks["metadatas"] or [] if meta and "source_path" in meta}
+        )
+        with _tracer.start_as_current_span("memory.semantic.retrieve") as span:
+            span.set_attribute("memory.collection", self._collection_name)
+            span.set_attribute("memory.top_k", query.top_k)
+            if query.session_id:
+                span.set_attribute("session_id", query.session_id)
+            embedding = (await self._provider.embed(self._embed_model, query.text))[0]
+            result = self._collection.query(
+                query_embeddings=[embedding],
+                n_results=min(query.top_k, facts),
+                # Chroma keeps records without the key: here, the facts.
+                where={"source_path": {"$nin": paths}} if paths else None,
+            )
+        return _entries_from_query_result(result)
+
     async def consolidate(self, session_id: str) -> None:
         """Learn durable facts about the user from their latest message and store them.
 

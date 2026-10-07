@@ -90,7 +90,8 @@ class MemoryManager:
         The current session's own dialogue is replayed separately by
         ``recent_history``; this block carries facts learned in other sessions.
         """
-        entries = await self._semantic.retrieve(
+        # Facts only: chunks of documents the user indexed are not things they said.
+        entries = await self._semantic.retrieve_facts(
             MemoryQuery(text=query, top_k=_SEMANTIC_CONTEXT_TOP_K, memory_types=["semantic"])
         )
         relevant = [
