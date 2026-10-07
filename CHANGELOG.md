@@ -12,7 +12,7 @@ A hardening release. It closes the last four issues from the outside security
 review (#55–#58) and gives the UI a Content-Security-Policy. The review's 25
 security cases that were expected to fail now pass as ordinary tests.
 
-Tests: 318 → 365 on Linux CI, with nothing marked `xfail`.
+Tests: 318 → 370 on Linux CI, with nothing marked `xfail`.
 
 **Upgrading:** run `git pull`, then `pip install -e .`, and restart the UI so it
 sends the new headers. There are no new dependencies.
@@ -63,6 +63,23 @@ sends the new headers. There are no new dependencies.
   markup into an answer, the browser would refuse to send anything off the
   machine. The UI also sends `nosniff`, `no-referrer`, and a Permissions-Policy
   that turns off the camera, microphone and location.
+- **CORTEX no longer tells you to `pip install` a name a model made up.** Asked to
+  run a program the sandbox can't run, CORTEX explains why and shows how to run it
+  on your machine. The `pip install` line used to name every module the program
+  imported, including ones a model invented, and packages get registered under
+  such names to catch people who follow the hint. Now it names only well-known
+  packages, such as numpy, pandas or pygame.
+
+### Fixed
+
+- **Asking to run a program works after a usage example or a shell block.** Two
+  mistakes in the check that decides whether a program can run in the sandbox:
+  - an example of importing the program from its own file, like
+    `from palindrome_checker import is_palindrome`, made a working program look
+    like it needed a missing package, so it wasn't run;
+  - a shell code block before the code, often `pip install pygame`, shifted how
+    the code fences were paired, so a pygame game wasn't recognised and the model
+    tried to run it in the sandbox.
 
 ### Changed
 
