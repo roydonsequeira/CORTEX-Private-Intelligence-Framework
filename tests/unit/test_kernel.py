@@ -57,6 +57,7 @@ def _mock_tool_call_response(
         output_tokens=10,
         latency_ms=50.0,
         raw=raw,
+        tool_calls=raw["message"]["tool_calls"],
     )
 
 
@@ -89,7 +90,7 @@ def _make_kernel(settings: Settings | None = None) -> tuple[AgentKernel, MagicMo
     memory_manager.store_tool_pattern = AsyncMock()
 
     cfg = settings or Settings(
-        ollama_base_url="http://fake:11434",
+        model_server_url="http://fake:11434",
         max_agent_steps=10,
         stream_tokens=False,
     )
@@ -105,7 +106,7 @@ def _make_kernel(settings: Settings | None = None) -> tuple[AgentKernel, MagicMo
 
 def _settings(**overrides: Any) -> Settings:
     values: dict[str, Any] = {
-        "ollama_base_url": "http://fake:11434",
+        "model_server_url": "http://fake:11434",
         "max_agent_steps": 10,
         "stream_tokens": False,
     }
@@ -577,7 +578,8 @@ async def test_parallel_tool_calls_are_capped_per_step() -> None:
     router.complete.side_effect = [
         _mock_model_response('["use the tool"]'),
         ModelResponse(
-            content="", model="m", input_tokens=1, output_tokens=1, latency_ms=1.0, raw=many_calls
+            content="", model="m", input_tokens=1, output_tokens=1, latency_ms=1.0,
+            raw=many_calls, tool_calls=many_calls["message"]["tool_calls"],
         ),
         _mock_model_response("Done."),
     ]
@@ -621,7 +623,7 @@ async def test_refused_user_code_ends_the_run_without_other_tools() -> None:
         _mock_model_response('["Run the code with python_exec"]'),
         ModelResponse(
             content="", model="m", input_tokens=1, output_tokens=1, latency_ms=1.0,
-            raw=python_then_listing,
+            raw=python_then_listing, tool_calls=python_then_listing["message"]["tool_calls"],
         ),
     ]
 

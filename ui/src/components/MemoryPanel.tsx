@@ -125,8 +125,8 @@ export function MemoryPanel({ sessionId }: MemoryPanelProps) {
 
       <div className="mt-auto px-5 py-4">
         <p className="text-[11px] leading-relaxed text-ink-faint">
-          Runs on your hardware via Ollama. Prompts, files, and memory never leave this
-          machine.
+          Runs on your own hardware. Prompts, files, and memory never go to a cloud
+          service.
         </p>
       </div>
 

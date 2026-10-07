@@ -46,7 +46,7 @@ class _FakeKernel:
 
 
 class _FakeProvider:
-    """Fake Ollama provider for health checks."""
+    """Fake model provider for health checks."""
 
     async def health_check(self) -> bool:
         return True
@@ -73,7 +73,7 @@ def app() -> FastAPI:
     """Create an app with mocked runtime state."""
     app = create_app()
     app.state.agent_kernel = _FakeKernel()
-    app.state.ollama_provider = _FakeProvider()
+    app.state.model_provider = _FakeProvider()
     app.state.semantic_memory = type("Semantic", (), {"_collection": object()})()
     app.state.tool_registry = _FakeToolRegistry()
     app.state.started_at = 1.0
@@ -123,6 +123,7 @@ async def test_health_returns_expected_structure(app: FastAPI) -> None:
     assert response.status_code == 200
     assert set(response.json()) == {
         "status",
+        "model_server",
         "ollama",
         "chromadb",
         "uptime_seconds",

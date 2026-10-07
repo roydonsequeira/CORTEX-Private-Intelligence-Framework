@@ -45,7 +45,7 @@ def test40_ollama_down() -> None:
     data = Path(tempfile.mkdtemp(prefix="quietpost-eval-40-"))
     env = {
         **os.environ,
-        "QUIETPOST_OLLAMA_BASE_URL": "http://127.0.0.1:9",  # nothing listens here
+        "QUIETPOST_MODEL_SERVER_URL": "http://127.0.0.1:9",  # nothing listens here
         "QUIETPOST_WARMUP_ON_STARTUP": "false",
         "QUIETPOST_DB_PATH": str(data / "quietpost.db"),
         "QUIETPOST_CHROMA_PATH": str(data / "chroma"),
@@ -78,12 +78,12 @@ def test40_ollama_down() -> None:
             bool(errors)
             and "ollama" in errors[0].lower()
             and alive
-            and health.get("ollama") is False
+            and health.get("model_server") is False
         )
         record(
             "40 ollama down",
             ok,
-            f"health.ollama={health.get('ollama')} error={errors[0][:160] if errors else None} alive={alive}",
+            f"health.model_server={health.get('model_server')} error={errors[0][:160] if errors else None} alive={alive}",
         )
     finally:
         proc.terminate()
@@ -164,7 +164,7 @@ def test44_doctor() -> None:
     )
     bad = subprocess.run(
         quietpost_command("doctor"),
-        env={**env, "QUIETPOST_OLLAMA_BASE_URL": "http://127.0.0.1:9"},
+        env={**env, "QUIETPOST_MODEL_SERVER_URL": "http://127.0.0.1:9"},
         capture_output=True,
         text=True,
         encoding="utf-8",

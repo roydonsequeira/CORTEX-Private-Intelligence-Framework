@@ -37,7 +37,7 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     environment:
-      - QUIETPOST_OLLAMA_BASE_URL=http://ollama:11434
+      - QUIETPOST_MODEL_SERVER_URL=http://ollama:11434
       - QUIETPOST_CHROMA_PATH=/app/.quietpost/chroma
       - QUIETPOST_DB_PATH=/app/.quietpost/quietpost.db
       - QUIETPOST_OTEL_ENDPOINT=http://jaeger:4317

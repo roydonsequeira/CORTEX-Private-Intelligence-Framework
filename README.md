@@ -20,7 +20,7 @@
 
 Cloud AI is powerful, but everything you send to it can be logged, retained, inspected, or used to train future models. Prompts, files, private notes, source code, and research questions leave your machine and enter systems you do not control.
 
-Quietpost is a fully local, privacy-first AI agent framework that runs on your own hardware. It combines Ollama models, a production FastAPI runtime, a Next.js operator UI, four-tier memory, sandboxed tools, LATS reasoning, supervisor-worker orchestration, and OpenTelemetry observability without requiring cloud API keys.
+Quietpost is a fully local, privacy-first AI agent framework that runs on your own hardware. It combines local models (Ollama, LM Studio, llama.cpp or vLLM), a production FastAPI runtime, a Next.js operator UI, four-tier memory, sandboxed tools, LATS reasoning, supervisor-worker orchestration, and OpenTelemetry observability without requiring cloud API keys.
 
 ## Built for small models: rules enforced in code, not prompts
 
@@ -59,7 +59,7 @@ flowchart TB
     Tools --> Web["web_fetch"]
     Tools --> Doc["doc_search"]
 
-    Router --> Ollama["Ollama<br/>qwen2.5 · nomic-embed · any model"]
+    Router --> Models["Ollama or an OpenAI-compatible server<br/>on this machine or your network"]
     API -. OTLP spans .-> Jaeger["Jaeger traces<br/>:16686"]
 ```
 
@@ -77,7 +77,7 @@ flowchart TB
 
 ## Quick Start
 
-**Prerequisites:** [Ollama](https://ollama.com), Python 3.12+, Node.js 20.9+ for the UI (24 LTS recommended). About 6 GB of disk for the default models; a GPU with 6 GB+ VRAM is recommended (CPU works, slowly).
+**Prerequisites:** [Ollama](https://ollama.com) (or another [model server](#other-model-servers)), Python 3.12+, Node.js 20.9+ for the UI (24 LTS recommended). About 6 GB of disk for the default models; a GPU with 6 GB+ VRAM is recommended (CPU works, slowly).
 
 ### Native (recommended for development)
 
@@ -90,7 +90,7 @@ python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -e .
 
-quietpost doctor                      # checks Python, config, Ollama, models, port, HTTPS
+quietpost doctor                      # checks Python, config, model server, models, port, HTTPS
 quietpost serve                       # API on http://localhost:8000
 
 cd ui && npm install && npm run dev   # UI on http://localhost:3000 (second terminal)
@@ -137,14 +137,17 @@ All runtime configuration lives in `quietpost.yaml` and can be overridden with `
 
 | Key | Default | Description |
 |---|---|---|
-| `ollama_base_url` | `http://localhost:11434` | Ollama server URL |
-| `ollama_model` | `qwen2.5:7b` | Chat and tool-calling model (FAST capability) |
-| `reasoning_model` | `qwen2.5:7b` | Planner / LATS model (REASONING capability; the UI's Reasoning toggle) |
-| `code_model` | `qwen2.5:7b` | Code model (CODE capability) |
+| `model_server` | `ollama` | `ollama`, or `openai-compatible` for LM Studio, llama.cpp's `llama-server`, vLLM and similar servers |
+| `model_server_url` | Ollama: `http://localhost:11434`; openai-compatible: `http://localhost:1234/v1` | The model server's address. It must be on this computer or your local network: a public address is refused |
+| `model_server_api_key` | `null` | Bearer key for a server started with one (vLLM's `--api-key`) |
+| `chat_model` | `qwen2.5:7b` | Chat and tool-calling model (FAST capability) |
+| `reasoning_model` | `chat_model` | Planner / LATS model (REASONING capability; the UI's Reasoning toggle) |
+| `code_model` | `chat_model` | Code model (CODE capability) |
+| `extract_model` | `chat_model` | Model that reads one email at a time, with no tools (EXTRACT capability) |
 | `embed_model` | `nomic-embed-text` | Embedding model |
-| `ollama_timeout_seconds` | `300` | Per-request Ollama timeout (covers a cold model load) |
-| `ollama_num_ctx` | `8192` | Context window pinned on every call |
-| `ollama_keep_alive` | `30m` | How long Ollama keeps the model loaded between requests |
+| `model_timeout_seconds` | `300` | Per-request model timeout (covers a cold model load) |
+| `ollama_num_ctx` | `8192` | Ollama only: the context window pinned on every call |
+| `ollama_keep_alive` | `30m` | Ollama only: how long the model stays loaded between requests |
 | `max_agent_steps` | `10` | ReAct step budget; at the limit Quietpost synthesizes a best-effort answer |
 | `max_run_seconds` | `120` | Wall-clock budget per request; past it Quietpost gives a best-effort answer |
 | `history_turns` | `6` | Prior turns of the session replayed into each request |
@@ -173,6 +176,23 @@ All runtime configuration lives in `quietpost.yaml` and can be overridden with `
 | `rate_limit.enabled` | `true` | Enable API rate limiting |
 | `rate_limit.requests_per_minute` | `200` | Default per-IP route limit |
 | `rate_limit.chat_requests_per_minute` | `60` | Per-IP `/chat` limit |
+
+The 1.x names `ollama_base_url`, `ollama_model` and `ollama_timeout_seconds` are still read. When a new name is also set, the new one wins.
+
+### Other model servers
+
+Ollama is the default. Any server with an OpenAI-compatible API works too, such as LM Studio, llama.cpp's `llama-server` or vLLM:
+
+```yaml
+model_server: openai-compatible
+model_server_url: http://localhost:1234/v1   # LM Studio. llama-server: :8080/v1, vLLM: :8000/v1
+chat_model: qwen2.5-7b-instruct              # the model's name as the server lists it
+embed_model: text-embedding-nomic-embed-text-v1.5
+```
+
+The chat model has to support tool calls. Start `llama-server` with `--jinja`, and vLLM with `--enable-auto-tool-choice` and the `--tool-call-parser` for your model (`hermes` for Qwen2.5). `quietpost doctor` checks that every configured model is there and lists the names the server uses.
+
+The server must run on this computer or your local network, because your prompts and files go to it. Quietpost refuses a model server on a public internet address, whether you typed an IP address or a name that resolves to one.
 
 ## Tool System
 

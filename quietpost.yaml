@@ -1,14 +1,20 @@
 # Quietpost configuration. Every key can be overridden with a QUIETPOST_<KEY>
 # environment variable (lists and nested blocks as JSON), e.g.
-#   QUIETPOST_OLLAMA_MODEL=llama3.1:8b   QUIETPOST_API_KEY=change-me
+#   QUIETPOST_CHAT_MODEL=llama3.1:8b   QUIETPOST_API_KEY=change-me
 # Run `quietpost doctor` after editing to check the setup.
 
-# --- Models (served by Ollama) ----------------------------------------------
-ollama_base_url: http://localhost:11434
-# One tool-capable model for every chat role: a single `ollama pull`.
-ollama_model: qwen2.5:7b
-reasoning_model: qwen2.5:7b
-code_model: qwen2.5:7b
+# --- Models -------------------------------------------------------------------
+# ollama, or openai-compatible for LM Studio, llama.cpp's llama-server or vLLM.
+# The server must be on this computer or your local network: Quietpost refuses
+# one on a public internet address.
+model_server: ollama
+# Unset: http://localhost:11434 for Ollama, http://localhost:1234/v1 (LM Studio)
+# for openai-compatible. llama-server: http://localhost:8080/v1.
+# model_server_url: http://localhost:11434
+# One tool-capable model for every role: a single `ollama pull`. On another
+# server, use the model's name as the server lists it.
+chat_model: qwen2.5:7b
+# reasoning_model, code_model and extract_model use chat_model unless set.
 embed_model: nomic-embed-text
 
 # --- Storage (created on first run; wipe with `quietpost reset-memory --yes`) --

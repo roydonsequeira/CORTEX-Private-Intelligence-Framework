@@ -1,9 +1,7 @@
 """Web fetch tool — offline-tolerant HTML/text retrieval with robots.txt checks."""
 
 import asyncio
-import ipaddress
 import re
-import socket
 import ssl
 import time
 from html import unescape
@@ -14,6 +12,7 @@ from urllib.parse import urljoin, urlparse
 import html2text
 import httpx
 
+from quietpost.network import is_public_address, resolve_addresses
 from quietpost.observability.tracing import get_tracer
 from quietpost.tools.base import BaseTool, ToolResult, ToolSchema
 
@@ -67,22 +66,12 @@ async def _is_public_host(host: str) -> bool:
     Ollama or Quietpost APIs, a router admin page, or cloud metadata at
     169.254.169.254. A host that does not resolve is left to fail normally.
     """
-    host = host.strip("[]")
-    if not host:
+    if not host.strip("[]"):
         return False
-    try:
-        addresses = [ipaddress.ip_address(host)]
-    except ValueError:
-        try:
-            infos = await asyncio.get_running_loop().getaddrinfo(host, None)
-        except (socket.gaierror, UnicodeError):
-            return True
-        addresses = [ipaddress.ip_address(str(info[4][0]).split("%")[0]) for info in infos]
-    for address in addresses:
-        mapped = getattr(address, "ipv4_mapped", None)
-        if not (mapped or address).is_global:
-            return False
-    return True
+    addresses = await resolve_addresses(host)
+    if addresses is None:
+        return True
+    return all(is_public_address(address) for address in addresses)
 
 
 def _ssl_context() -> ssl.SSLContext | bool:

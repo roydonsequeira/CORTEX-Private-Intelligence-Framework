@@ -37,9 +37,9 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     environment:
-      - QUIETPOST_OLLAMA_BASE_URL=http://ollama:11434
+      - QUIETPOST_MODEL_SERVER_URL=http://ollama:11434
       # Point every model capability at one tiny CPU-friendly model.
-      - QUIETPOST_OLLAMA_MODEL=llama3.2:1b
+      - QUIETPOST_CHAT_MODEL=llama3.2:1b
       - QUIETPOST_REASONING_MODEL=llama3.2:1b
       - QUIETPOST_CODE_MODEL=llama3.2:1b
       - QUIETPOST_EMBED_MODEL=nomic-embed-text

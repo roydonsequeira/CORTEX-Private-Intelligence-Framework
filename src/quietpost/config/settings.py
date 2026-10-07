@@ -18,6 +18,18 @@ _LEGACY_CONFIG_FILENAME = "cortex.yaml"
 _LEGACY_CONFIG_ENV_VAR = "CORTEX_CONFIG"
 _LEGACY_ENV_PREFIX = "CORTEX_"
 _LEGACY_DATA_NAMES = {".quietpost": ".cortex", "quietpost.db": "cortex.db"}
+# The model settings had Ollama-only names before 2.0. They are still read; the
+# new name wins when both are set.
+_RENAMED_MODEL_SETTINGS = {
+    "ollama_base_url": "model_server_url",
+    "ollama_model": "chat_model",
+    "ollama_timeout_seconds": "model_timeout_seconds",
+}
+_DEFAULT_MODEL_URLS = {
+    "ollama": "http://localhost:11434",
+    # LM Studio's address. llama-server listens on :8080 and vLLM on :8000.
+    "openai-compatible": "http://localhost:1234/v1",
+}
 
 
 def _resolve_config_path() -> Path | None:
@@ -135,20 +147,35 @@ class RateLimitSettings(BaseModel):
 class Settings(BaseSettings):
     """All Quietpost runtime configuration. No magic strings in the codebase."""
 
-    ollama_base_url: str = "http://localhost:11434"
+    # Where the models run: "ollama", or "openai-compatible" for LM Studio,
+    # llama.cpp's llama-server, vLLM and other servers with an OpenAI-style API.
+    # Only a server on this machine or the local network is accepted; a public
+    # address is refused (models/endpoints.py), because prompts carry email.
+    model_server: Literal["ollama", "openai-compatible"] = "ollama"
+    # Unset means the usual address of model_server (see _DEFAULT_MODEL_URLS).
+    model_server_url: str | None = None
+    # Only for a server started with an API key (vLLM's --api-key).
+    model_server_api_key: str | None = None
     # One tool-capable model for every chat role keeps setup to a single pull;
     # qwen2.5:7b had the most reliable tool calling of the models tested on a 6 GB GPU.
-    ollama_model: str = "qwen2.5:7b"
-    reasoning_model: str = "qwen2.5:7b"
-    code_model: str = "qwen2.5:7b"
+    chat_model: str = "qwen2.5:7b"
+    # Each of these uses chat_model unless set. extract_model reads one email at
+    # a time, which a smaller, faster model can do.
+    extract_model: str | None = None
+    reasoning_model: str | None = None
+    code_model: str | None = None
     embed_model: str = "nomic-embed-text"
     # A cold 7-8B model load plus a long answer can exceed two minutes on a laptop.
-    ollama_timeout_seconds: float = 300.0
-    # Pinned for every call: Ollama reloads the model when num_ctx changes, and its
-    # small default silently truncates long tool transcripts.
+    model_timeout_seconds: float = 300.0
+    # Ollama only. Pinned for every call: Ollama reloads the model when num_ctx
+    # changes, and its small default silently truncates long tool transcripts.
     ollama_num_ctx: int = 8192
-    # How long Ollama keeps the model resident after a request (its default is 5m).
+    # Ollama only. How long it keeps the model resident after a request (its default is 5m).
     ollama_keep_alive: str = "30m"
+    # The 1.x names of model_server_url, chat_model and model_timeout_seconds.
+    ollama_base_url: str | None = None
+    ollama_model: str | None = None
+    ollama_timeout_seconds: float | None = None
     # Load the chat model in the background at startup so the first request is fast.
     warmup_on_startup: bool = True
     chroma_path: Path = Path("./.quietpost/chroma")
@@ -222,6 +249,31 @@ class Settings(BaseSettings):
         self.db_path = _existing_data_path(self.db_path)
         self.task_db_path = _existing_data_path(self.task_db_path)
         return self
+
+    @model_validator(mode="after")
+    def _read_1x_model_settings(self) -> "Settings":
+        """Use ollama_model and the other 1.x names when the new name is not set."""
+        for old, new in _RENAMED_MODEL_SETTINGS.items():
+            value = getattr(self, old)
+            if value is not None and new not in self.model_fields_set:
+                setattr(self, new, value)
+        return self
+
+    @property
+    def model_url(self) -> str:
+        """model_server_url, or the usual address of the chosen model server."""
+        return self.model_server_url or _DEFAULT_MODEL_URLS[self.model_server]
+
+    @property
+    def configured_models(self) -> dict[str, str]:
+        """The model each *_model setting uses; an unset one uses chat_model."""
+        return {
+            "chat_model": self.chat_model,
+            "extract_model": self.extract_model or self.chat_model,
+            "reasoning_model": self.reasoning_model or self.chat_model,
+            "code_model": self.code_model or self.chat_model,
+            "embed_model": self.embed_model,
+        }
 
     @property
     def use_lats(self) -> bool:

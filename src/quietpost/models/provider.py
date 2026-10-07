@@ -1,9 +1,13 @@
-"""Ollama model provider — async HTTP client wrapping the Ollama REST API."""
+"""Model providers: what Quietpost needs from a model server, and the Ollama client.
+
+The OpenAI-compatible client for LM Studio, llama.cpp and vLLM is in
+models/openai_compat.py; models/factory.py picks one from the settings.
+"""
 
 import json
 import time
 from collections.abc import AsyncIterator
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -64,16 +68,25 @@ class Message(BaseModel):
 
 
 class GenerationConfig(BaseModel):
-    """Controls sampling behaviour for a generation call."""
+    """Controls sampling behaviour for a generation call.
+
+    ``json_schema`` makes the server constrain the reply to JSON that matches it
+    (Ollama's ``format``, OpenAI's ``response_format``).
+    """
 
     temperature: float = 0.7
     top_p: float = 0.9
     max_tokens: int = 4096
     stop: list[str] | None = None
+    json_schema: dict[str, Any] | None = None
 
 
 class ModelResponse(BaseModel):
-    """Normalised response from any model backend."""
+    """Normalised response from any model backend.
+
+    ``tool_calls`` has the same shape from every server:
+    ``[{"function": {"name": ..., "arguments": ...}}]``.
+    """
 
     content: str
     model: str
@@ -81,6 +94,7 @@ class ModelResponse(BaseModel):
     output_tokens: int
     latency_ms: float
     raw: dict[str, Any]
+    tool_calls: list[dict[str, Any]] | None = None
 
 
 class StreamChunk(BaseModel):
@@ -97,6 +111,60 @@ class StreamChunk(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     model: str = ""
+
+
+class ModelProvider(Protocol):
+    """What Quietpost needs from a model server.
+
+    OllamaProvider speaks Ollama's own API. OpenAICompatibleProvider speaks the
+    OpenAI Chat Completions API that LM Studio, llama.cpp's llama-server and vLLM
+    serve. Both return tool calls in the same shape.
+    """
+
+    @property
+    def base_url(self) -> str:
+        """The address requests go to."""
+        ...
+
+    async def complete(
+        self,
+        model: str,
+        messages: list[Message],
+        config: GenerationConfig | None = None,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> ModelResponse:
+        """Return the whole reply at once."""
+        ...
+
+    def stream_complete(
+        self,
+        model: str,
+        messages: list[Message],
+        config: GenerationConfig | None = None,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[StreamChunk]:
+        """Yield the reply as it is generated; the last chunk carries any tool calls."""
+        ...
+
+    async def embed(self, model: str, text: str | list[str]) -> list[list[float]]:
+        """Return one embedding vector per text."""
+        ...
+
+    async def list_models(self) -> list[str]:
+        """Return the names of the models the server has."""
+        ...
+
+    async def health_check(self) -> bool:
+        """Return True if the server answers."""
+        ...
+
+    async def warmup(self, model: str) -> None:
+        """Load a chat model ahead of the first request."""
+        ...
+
+    async def aclose(self) -> None:
+        """Close the HTTP client."""
+        ...
 
 
 class OllamaProvider:
@@ -117,7 +185,7 @@ class OllamaProvider:
         num_ctx: int | None = None,
         keep_alive: str | None = None,
     ) -> None:
-        self._base_url = _prefer_ipv4_loopback(base_url.rstrip("/"))
+        self._base_url = prefer_ipv4_loopback(base_url.rstrip("/"))
         self._num_ctx = num_ctx
         self._keep_alive = keep_alive
         # Models Ollama rejected with "does not support tools" (e.g. gemma3,
@@ -127,7 +195,15 @@ class OllamaProvider:
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
             timeout=httpx.Timeout(timeout, connect=10.0),
+            # Never through an HTTP(S)_PROXY from the environment: prompts and
+            # email go to the model server directly, not via another host.
+            trust_env=False,
         )
+
+    @property
+    def base_url(self) -> str:
+        """The Ollama address requests go to."""
+        return self._base_url
 
     def _payload(
         self,
@@ -157,6 +233,8 @@ class OllamaProvider:
             payload["keep_alive"] = self._keep_alive
         if tools:
             payload["tools"] = tools
+        if cfg.json_schema:
+            payload["format"] = cfg.json_schema
         return payload
 
     def _describe_error(self, exc: httpx.HTTPError, model: str) -> str:
@@ -219,6 +297,7 @@ class OllamaProvider:
             output_tokens=data.get("eval_count", 0),
             latency_ms=latency,
             raw=data,
+            tool_calls=msg.get("tool_calls") or None,
         )
 
     async def stream_complete(
@@ -383,12 +462,12 @@ class OllamaProvider:
         await self._client.aclose()
 
 
-def _prefer_ipv4_loopback(url: str) -> str:
-    """Rewrite a ``localhost`` Ollama URL to ``127.0.0.1``.
+def prefer_ipv4_loopback(url: str) -> str:
+    """Rewrite a ``localhost`` model server URL to ``127.0.0.1``.
 
-    Ollama binds IPv4 loopback only. On Windows, resolving ``localhost`` tries
-    ``::1`` first and the refused IPv6 connect costs ~2 s before falling back,
-    on every new connection (measured: 2062 ms vs 23 ms).
+    Ollama, like most local model servers, binds IPv4 loopback only. On Windows,
+    resolving ``localhost`` tries ``::1`` first and the refused IPv6 connect costs
+    ~2 s before falling back, on every new connection (measured: 2062 ms vs 23 ms).
     """
     parts = urlsplit(url)
     if parts.hostname != "localhost":

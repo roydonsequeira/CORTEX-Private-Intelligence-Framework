@@ -14,7 +14,8 @@ def test_settings_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.chdir(tmp_path)
     get_settings.cache_clear()
     s = get_settings()
-    assert s.ollama_base_url == "http://localhost:11434"
+    assert s.model_server == "ollama"
+    assert s.model_url == "http://localhost:11434"
     assert s.api_port == 8000
     assert s.log_level == "INFO"
 
@@ -23,11 +24,11 @@ def test_settings_load_from_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     """Settings load values from quietpost.yaml."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "quietpost.yaml").write_text(
-        yaml.dump({"ollama_model": "qwen2.5:14b", "api_port": 9000})
+        yaml.dump({"chat_model": "qwen2.5:14b", "api_port": 9000})
     )
     get_settings.cache_clear()
     s = get_settings()
-    assert s.ollama_model == "qwen2.5:14b"
+    assert s.chat_model == "qwen2.5:14b"
     assert s.api_port == 9000
 
 
@@ -200,6 +201,63 @@ def test_data_from_before_the_rename_is_used_until_the_new_folder_exists(
     settings = get_settings()
     assert settings.chroma_path == tmp_path / ".quietpost" / "chroma"
     assert settings.db_path == tmp_path / ".quietpost" / "quietpost.db"
+
+
+def test_model_url_defaults_to_the_usual_address_of_the_chosen_server() -> None:
+    assert Settings().model_url == "http://localhost:11434"
+    assert Settings(model_server="openai-compatible").model_url == "http://localhost:1234/v1"
+    assert (
+        Settings(model_server="openai-compatible", model_server_url="http://localhost:8080/v1").model_url
+        == "http://localhost:8080/v1"
+    )
+
+
+def test_an_unknown_model_server_is_rejected() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Settings(model_server="openai")  # type: ignore[arg-type]
+
+
+def test_1x_model_setting_names_are_still_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 1.x cortex.yaml names the model settings after Ollama; they still apply."""
+    (tmp_path / "cortex.yaml").write_text(
+        yaml.dump(
+            {
+                "ollama_base_url": "http://gpu-box:11434",
+                "ollama_model": "qwen2.5:14b",
+                "ollama_timeout_seconds": 600,
+            }
+        )
+    )
+    monkeypatch.chdir(tmp_path)
+    get_settings.cache_clear()
+    s = get_settings()
+    assert (s.model_url, s.chat_model, s.model_timeout_seconds) == (
+        "http://gpu-box:11434",
+        "qwen2.5:14b",
+        600,
+    )
+
+    monkeypatch.setenv("QUIETPOST_OLLAMA_MODEL", "llama3.1:8b")
+    get_settings.cache_clear()
+    assert get_settings().chat_model == "llama3.1:8b"
+
+
+def test_new_model_setting_names_win_over_1x_ones(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "quietpost.yaml").write_text(
+        yaml.dump({"ollama_model": "old-m", "chat_model": "new-m"})
+    )
+    monkeypatch.setenv("CORTEX_OLLAMA_BASE_URL", "http://old:11434")
+    monkeypatch.setenv("QUIETPOST_MODEL_SERVER_URL", "http://new:11434")
+    monkeypatch.chdir(tmp_path)
+    get_settings.cache_clear()
+    s = get_settings()
+    assert (s.chat_model, s.model_url) == ("new-m", "http://new:11434")
 
 
 def test_a_fresh_install_uses_the_new_data_folder(

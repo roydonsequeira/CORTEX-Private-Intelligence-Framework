@@ -13,7 +13,7 @@ from quietpost.memory.base import BaseMemory, MemoryEntry, MemoryQuery
 from quietpost.memory.chroma import get_chroma_client
 from quietpost.memory.episodic import EpisodicMemory
 from quietpost.models.parsing import extract_json
-from quietpost.models.provider import GenerationConfig, Message, OllamaProvider
+from quietpost.models.provider import GenerationConfig, Message, ModelProvider
 from quietpost.observability.tracing import get_tracer
 from quietpost.provenance import instruction_text
 
@@ -137,7 +137,7 @@ class SemanticMemory(BaseMemory):
         self,
         chroma_path: str | Path,
         embed_model: str,
-        provider: OllamaProvider,
+        provider: ModelProvider,
         episodic_memory: EpisodicMemory | None = None,
         collection_name: str = "cortex_semantic",
         client: Any | None = None,

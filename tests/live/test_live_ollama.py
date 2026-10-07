@@ -53,8 +53,8 @@ async def provider() -> AsyncIterator[OllamaProvider]:
 
 def _test_settings(tmp_path: Path) -> Settings:
     return Settings(
-        ollama_base_url=_BASE_URL,
-        ollama_model=_MODEL,
+        model_server_url=_BASE_URL,
+        chat_model=_MODEL,
         embed_model=_EMBED_MODEL,
         chroma_path=tmp_path / "chroma",
         db_path=tmp_path / "quietpost.db",
@@ -83,7 +83,7 @@ async def _build_kernel(provider: OllamaProvider, settings: Settings) -> AgentKe
         settings.embed_model,
         provider,
         episodic_memory=episodic,
-        consolidation_model=settings.ollama_model,
+        consolidation_model=settings.chat_model,
     )
     procedural = ProceduralMemory(settings.chroma_path, settings.embed_model, provider)
     memory_manager = MemoryManager(WorkingMemory(), episodic, semantic, procedural)

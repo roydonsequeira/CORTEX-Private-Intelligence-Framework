@@ -29,7 +29,8 @@ from quietpost.memory.manager import MemoryManager
 from quietpost.memory.procedural import ProceduralMemory
 from quietpost.memory.semantic import SemanticMemory
 from quietpost.memory.working import WorkingMemory
-from quietpost.models.provider import OllamaProvider
+from quietpost.models.factory import create_provider
+from quietpost.models.provider import ModelProvider
 from quietpost.models.router import ModelRouter
 from quietpost.observability.logging import configure_logging
 from quietpost.observability.metrics import setup_metrics
@@ -92,7 +93,7 @@ def create_app() -> FastAPI:
 
 
 async def _model_error_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Ollama problems are a dependency outage (503), with the actionable message."""
+    """Model server problems are a dependency outage (503), with the actionable message."""
     return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 
@@ -113,12 +114,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     setup_tracing("quietpost-api", settings.otel_endpoint, enabled=settings.telemetry_enabled)
     setup_metrics(settings.otel_endpoint if settings.telemetry_enabled else None)
 
-    provider = OllamaProvider(
-        settings.ollama_base_url,
-        timeout=settings.ollama_timeout_seconds,
-        num_ctx=settings.ollama_num_ctx,
-        keep_alive=settings.ollama_keep_alive,
-    )
+    # Refuses a model server on a public address before anything is sent to it.
+    provider = await create_provider(settings)
     await _check_models(provider, settings)
 
     episodic = EpisodicMemory(settings.db_path)
@@ -127,7 +124,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.embed_model,
         provider,
         episodic_memory=episodic,
-        consolidation_model=settings.ollama_model,
+        consolidation_model=settings.chat_model,
     )
     procedural = ProceduralMemory(settings.chroma_path, settings.embed_model, provider)
     memory_manager = MemoryManager(
@@ -152,7 +149,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
 
     app.state.settings = settings
-    app.state.ollama_provider = provider
+    app.state.model_provider = provider
     app.state.model_router = router
     app.state.memory_manager = memory_manager
     app.state.episodic_memory = episodic
@@ -176,7 +173,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     logger.info(
         "quietpost_ready",
-        model=settings.ollama_model,
+        model=settings.chat_model,
+        model_server=settings.model_server,
         tools=[schema.name for schema in tool_registry.list_tools()],
     )
 
@@ -196,47 +194,55 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         shutdown_tracing()
 
 
-async def _check_models(provider: OllamaProvider, settings: Settings) -> None:
+async def _check_models(provider: ModelProvider, settings: Settings) -> None:
     """Log, at startup, exactly which configured models are missing and how to fix it."""
     if not await provider.health_check():
         logger.critical(
-            "ollama_unreachable",
-            base_url=settings.ollama_base_url,
-            fix="Start Ollama (`ollama serve` or the Ollama app), then restart Quietpost.",
+            "model_server_unreachable",
+            model_server=settings.model_server,
+            url=provider.base_url,
+            fix=f"{start_server_fix(settings)}, then restart Quietpost.",
         )
         return
     try:
         available = set(await provider.list_models())
     except QuietpostModelError as exc:
-        logger.warning("ollama_list_models_failed", error=str(exc))
+        logger.warning("list_models_failed", error=str(exc))
         return
     for model in missing_models(settings, available):
-        logger.critical("model_not_pulled", model=model, fix=f"ollama pull {model}")
+        logger.critical("model_missing", model=model, fix=missing_model_fix(settings, model))
 
 
 def missing_models(settings: Settings, available: set[str]) -> list[str]:
-    """Return configured models that Ollama does not have (":latest" is implied)."""
+    """Return configured models the model server does not have (":latest" is implied)."""
     names = available | {name.removesuffix(":latest") for name in available}
-    configured = dict.fromkeys(
-        [
-            settings.ollama_model,
-            settings.reasoning_model,
-            settings.code_model,
-            settings.embed_model,
-        ]
-    )
+    configured = dict.fromkeys(settings.configured_models.values())
     return [model for model in configured if model not in names]
 
 
-async def _warm_up(provider: OllamaProvider, settings: Settings) -> None:
+def start_server_fix(settings: Settings) -> str:
+    """How to start the configured model server."""
+    if settings.model_server == "ollama":
+        return "Start Ollama (`ollama serve` or the Ollama app)"
+    return "Start your model server (LM Studio's local server, llama-server or vLLM)"
+
+
+def missing_model_fix(settings: Settings, model: str) -> str:
+    """How to get a missing model onto the configured model server."""
+    if settings.model_server == "ollama":
+        return f"ollama pull {model}"
+    return f"load {model} in your model server, or set the *_model settings to models it lists"
+
+
+async def _warm_up(provider: ModelProvider, settings: Settings) -> None:
     """Load the chat and embedding models in the background so the first request is fast."""
     started = time.monotonic()
     try:
-        await provider.warmup(settings.ollama_model)
+        await provider.warmup(settings.chat_model)
         await provider.embed(settings.embed_model, "warm-up")
         logger.info(
             "models_warm",
-            model=settings.ollama_model,
+            model=settings.chat_model,
             seconds=round(time.monotonic() - started, 1),
         )
     except Exception as exc:  # warm-up is an optimisation, never fatal

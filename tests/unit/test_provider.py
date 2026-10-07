@@ -9,7 +9,13 @@ import httpx
 import pytest
 
 from quietpost.exceptions import QuietpostModelError
-from quietpost.models.provider import Message, ModelResponse, OllamaProvider, ToolCall
+from quietpost.models.provider import (
+    GenerationConfig,
+    Message,
+    ModelResponse,
+    OllamaProvider,
+    ToolCall,
+)
 
 
 class _FakeStreamResponse:
@@ -320,6 +326,45 @@ async def test_payload_pins_context_window_and_keep_alive() -> None:
     payload = post_mock.await_args.kwargs["json"]
     assert payload["options"]["num_ctx"] == 8192
     assert payload["keep_alive"] == "30m"
+
+
+@pytest.mark.asyncio
+async def test_complete_returns_tool_calls(provider: OllamaProvider) -> None:
+    """Tool calls are on the response itself, in the shape every provider uses."""
+    call = {"function": {"name": "calculator", "arguments": {"expression": "2+2"}}}
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {
+        "model": "qwen2.5:7b",
+        "message": {"role": "assistant", "content": "", "tool_calls": [call]},
+    }
+
+    with patch.object(provider._client, "post", new=AsyncMock(return_value=mock_resp)):
+        result = await provider.complete("qwen2.5:7b", [Message(role="user", content="2+2?")])
+
+    assert result.tool_calls == [call]
+
+
+@pytest.mark.asyncio
+async def test_json_schema_is_sent_as_ollama_format(provider: OllamaProvider) -> None:
+    schema = {"type": "object", "properties": {"amount": {"type": "number"}}}
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = _make_chat_response('{"amount": 1}')
+    post_mock = AsyncMock(return_value=mock_resp)
+
+    with patch.object(provider._client, "post", new=post_mock):
+        await provider.complete(
+            "qwen2.5:7b", [Message(role="user", content="x")], GenerationConfig(json_schema=schema)
+        )
+
+    assert post_mock.await_args is not None
+    assert post_mock.await_args.kwargs["json"]["format"] == schema
+
+
+def test_model_requests_ignore_proxy_environment_variables() -> None:
+    """Prompts go straight to Ollama, never through an HTTP(S)_PROXY from the environment."""
+    assert OllamaProvider("http://127.0.0.1:11434")._client.trust_env is False
 
 
 def test_message_serialises_tool_calls_for_ollama() -> None:

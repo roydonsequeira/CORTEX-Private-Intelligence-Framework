@@ -1,4 +1,4 @@
-"""Model router — selects the right Ollama model for a given capability."""
+"""Model router — selects the right model for a given capability."""
 
 from collections.abc import AsyncIterator
 from enum import StrEnum
@@ -8,37 +8,44 @@ from quietpost.config.settings import Settings
 from quietpost.models.provider import (
     GenerationConfig,
     Message,
+    ModelProvider,
     ModelResponse,
-    OllamaProvider,
     StreamChunk,
 )
 
 
 class ModelCapability(StrEnum):
-    """High-level capability buckets used to route requests to the right model."""
+    """High-level capability buckets used to route requests to the right model.
+
+    EXTRACT is for reading one email at a time, without tools, into structured
+    fields: work a smaller, faster model can do.
+    """
 
     REASONING = "REASONING"
     FAST = "FAST"
+    EXTRACT = "EXTRACT"
     EMBEDDING = "EMBEDDING"
     CODE = "CODE"
 
 
 class ModelRouter:
-    """Routes model requests to the appropriate Ollama model by capability."""
+    """Routes model requests to the appropriate model by capability."""
 
     def __init__(
         self,
-        provider: OllamaProvider,
+        provider: ModelProvider,
         settings: Settings,
         routing: dict[ModelCapability, str] | None = None,
     ) -> None:
         self._provider = provider
         self._settings = settings
+        models = settings.configured_models
         self._routing = routing or {
-            ModelCapability.REASONING: settings.reasoning_model,
-            ModelCapability.FAST: settings.ollama_model,
-            ModelCapability.EMBEDDING: settings.embed_model,
-            ModelCapability.CODE: settings.code_model,
+            ModelCapability.REASONING: models["reasoning_model"],
+            ModelCapability.FAST: models["chat_model"],
+            ModelCapability.EXTRACT: models["extract_model"],
+            ModelCapability.EMBEDDING: models["embed_model"],
+            ModelCapability.CODE: models["code_model"],
         }
 
     def route(self, capability: ModelCapability) -> str:

@@ -40,6 +40,7 @@ def model_tool_call(name: str, arguments: dict[str, Any]) -> ModelResponse:
                 "tool_calls": [{"function": {"name": name, "arguments": arguments}}],
             }
         },
+        tool_calls=[{"function": {"name": name, "arguments": arguments}}],
     )
 
 
@@ -96,7 +97,7 @@ def scripted_kernel(
     memory.store_tool_pattern = AsyncMock()
 
     settings = Settings(
-        ollama_base_url="http://fake:11434", max_agent_steps=8, stream_tokens=False
+        model_server_url="http://fake:11434", max_agent_steps=8, stream_tokens=False
     )
     kernel = AgentKernel(
         router=router, tool_registry=registry, memory_manager=memory, settings=settings

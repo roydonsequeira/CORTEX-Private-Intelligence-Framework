@@ -1,7 +1,7 @@
 """`quietpost` command line: start the API and diagnose a local setup.
 
     quietpost serve          start the API (uvicorn) with the settings from quietpost.yaml
-    quietpost doctor         check Python, config, Ollama, models, ports, and HTTPS
+    quietpost doctor         check Python, config, the model server, models, ports, and HTTPS
     quietpost reset-memory   wipe stored memory (asks for --yes)
 
 Because this runs inside the interpreter Quietpost is installed in, it cannot pick
@@ -10,10 +10,15 @@ up a different Python's `uvicorn` from PATH — the most common reason a bare
 """
 
 import argparse
+import asyncio
 import os
 import socket
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from quietpost.config.settings import Settings
 
 _OK = "[ ok ]"
 _WARN = "[warn]"
@@ -57,10 +62,17 @@ def _serve(host: str | None, port: int | None, reload: bool) -> int:
     import uvicorn
 
     from quietpost.config import get_settings
+    from quietpost.exceptions import QuietpostConfigError
+    from quietpost.models.endpoints import ensure_local_model_server
 
     settings = get_settings()
     bind_host = host or settings.api_host
     bind_port = port or settings.api_port
+    try:
+        asyncio.run(ensure_local_model_server(settings.model_url))
+    except QuietpostConfigError as exc:
+        print(f"{_FAIL} {exc}")
+        return 1
     if not _port_free(bind_host, bind_port):
         print(
             f"{_FAIL} Port {bind_port} is already in use — another Quietpost (or other "
@@ -90,6 +102,7 @@ def doctor() -> int:
     import httpx
 
     from quietpost.config.settings import Settings, _resolve_config_path
+    from quietpost.exceptions import QuietpostConfigError, QuietpostModelError
 
     failures = 0
     print("Quietpost doctor\n")
@@ -107,32 +120,39 @@ def doctor() -> int:
         print(f"{_FAIL} Config could not be loaded: {exc}")
         return 1
 
-    base = settings.ollama_base_url.rstrip("/")
+    from quietpost.api.server import missing_model_fix, missing_models, start_server_fix
+
+    server = "Ollama" if settings.model_server == "ollama" else "Model server"
     try:
-        response = httpx.get(f"{base}/api/tags", timeout=5.0)
-        response.raise_for_status()
-        available = {m["name"] for m in response.json().get("models", [])}
-        print(f"{_OK} Ollama reachable at {base} ({len(available)} models)")
-    except Exception as exc:
-        print(f"{_FAIL} Ollama not reachable at {base}: {exc}")
-        print("       Fix: start the Ollama app or run `ollama serve`.")
+        available = asyncio.run(_server_models(settings))
+        print(f"{_OK} {server} reachable at {settings.model_url} ({len(available)} models)")
+    except QuietpostConfigError as exc:
+        print(f"{_FAIL} {exc}")
+        return failures + 1
+    except QuietpostModelError as exc:
+        print(f"{_FAIL} {server} not reachable at {settings.model_url}: {exc}")
+        print(f"       Fix: {start_server_fix(settings)}.")
         return failures + 1
 
-    from quietpost.api.server import missing_models
-
-    configured = {
-        "chat (ollama_model)": settings.ollama_model,
-        "reasoning (reasoning_model)": settings.reasoning_model,
-        "code (code_model)": settings.code_model,
-        "embeddings (embed_model)": settings.embed_model,
-    }
     missing = set(missing_models(settings, available))
-    for role, model in configured.items():
+    unset = [
+        name
+        for name in ("reasoning_model", "code_model", "extract_model")
+        if getattr(settings, name) is None
+    ]
+    for setting, model in settings.configured_models.items():
+        if setting in unset:
+            continue
         if model in missing:
-            print(f"{_FAIL} {role}: '{model}' is not pulled.  Fix: ollama pull {model}")
+            print(f"{_FAIL} {setting}: '{model}' is missing.  Fix: {missing_model_fix(settings, model)}")
             failures += 1
         else:
-            print(f"{_OK} {role}: {model}")
+            print(f"{_OK} {setting}: {model}")
+    if unset:
+        print(f"       {', '.join(unset)}: not set, so chat_model is used")
+    if missing and available and settings.model_server != "ollama":
+        # Other servers name models their own way ("qwen2.5-7b-instruct").
+        print(f"       The server lists: {', '.join(sorted(available)[:12])}")
 
     for label, path in (
         ("episodic db", settings.db_path.parent),
@@ -168,6 +188,17 @@ def doctor() -> int:
     else:
         print("All checks passed. Start the API with: quietpost serve")
     return 1 if failures else 0
+
+
+async def _server_models(settings: "Settings") -> set[str]:
+    """The models the configured model server lists (QuietpostModelError if unreachable)."""
+    from quietpost.models.factory import create_provider
+
+    provider = await create_provider(settings)
+    try:
+        return set(await provider.list_models())
+    finally:
+        await provider.aclose()
 
 
 def _reset_memory(confirmed: bool) -> int:

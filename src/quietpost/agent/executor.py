@@ -170,7 +170,7 @@ class Executor:
                     tools=tools_arg,
                 )
                 content = response.content
-                raw_tool_calls = response.raw.get("message", {}).get("tool_calls")
+                raw_tool_calls = response.tool_calls
                 streamed = False
 
             state.steps_taken += 1
@@ -418,7 +418,10 @@ class Executor:
 
 
 def _parse_tool_call(raw: dict[str, Any]) -> tuple[str, dict[str, Any], str | None]:
-    """Return (name, arguments, parse_error) for one raw Ollama tool call."""
+    """Return (name, arguments, parse_error) for one raw tool call.
+
+    Ollama sends the arguments as an object, OpenAI-compatible servers as a JSON string.
+    """
     fn = raw.get("function", raw) if isinstance(raw, dict) else {}
     name = str(fn.get("name", "") or "unknown")
     raw_args = fn.get("arguments", {})

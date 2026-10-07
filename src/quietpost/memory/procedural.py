@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from quietpost.memory.base import BaseMemory, MemoryEntry, MemoryQuery
 from quietpost.memory.chroma import get_chroma_client
-from quietpost.models.provider import OllamaProvider
+from quietpost.models.provider import ModelProvider
 from quietpost.observability.tracing import get_tracer
 
 _tracer = get_tracer(__name__)
@@ -32,7 +32,7 @@ class ProceduralMemory(BaseMemory):
         self,
         chroma_path: str | Path,
         embed_model: str,
-        provider: OllamaProvider,
+        provider: ModelProvider,
         collection_name: str = "cortex_procedural",
         client: Any | None = None,
     ) -> None:

@@ -19,3 +19,7 @@ class QuietpostPlannerError(QuietpostError):
 
 class QuietpostMemoryError(QuietpostError):
     """Raised on failures in the memory subsystem."""
+
+
+class QuietpostConfigError(QuietpostError):
+    """Raised when the configuration would break one of Quietpost's rules."""

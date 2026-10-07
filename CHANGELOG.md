@@ -6,6 +6,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **LM Studio, llama.cpp and vLLM.** With `model_server: openai-compatible`,
+  Quietpost uses any local server with an OpenAI-compatible API instead of Ollama.
+  `model_server_url` defaults to LM Studio's `http://localhost:1234/v1`, and
+  `model_server_api_key` is for a server started with a key.
+- **A model server on a public address is refused.** `quietpost serve`,
+  `quietpost doctor` and the API stop with an explanation when `model_server_url`
+  is, or resolves to, a public internet address. This computer, private networks
+  and Tailscale addresses are fine.
+- An `extract_model` setting and an `EXTRACT` capability, for reading one email at
+  a time with a smaller model. The inbox audit will use it.
+- `GenerationConfig.json_schema` makes either kind of server reply with JSON that
+  matches a schema.
+
 ### Changed
 
 - **CORTEX is now Quietpost.** The package, the command, the config file and the
@@ -24,6 +39,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   With Docker, the data volume is now `quietpost_data`. To bring 1.x memory
   across once, before the first `docker compose up`:
   `docker run --rm -v infra_cortex_data:/from -v infra_quietpost_data:/to alpine cp -a /from/. /to/`.
+- **Model settings have server-neutral names:** `ollama_model` is now
+  `chat_model`, `ollama_base_url` is `model_server_url`, and
+  `ollama_timeout_seconds` is `model_timeout_seconds`. The old names are still
+  read, and the new name wins when both are set. `ollama_num_ctx` and
+  `ollama_keep_alive` keep their names and apply to Ollama only.
+- `reasoning_model` and `code_model` now default to `chat_model`. Both defaults
+  were already `qwen2.5:7b`, the same as the chat model, so a setup changes only
+  if it sets the chat model and not these two: they now follow it.
+- `/health` reports `model_server`. The `ollama` field stays, with the same
+  value, for clients written for 1.x.
+- Model requests ignore `HTTP_PROXY` and `HTTPS_PROXY`, so prompts go straight to
+  the model server.
 
 ## [1.2.3] - 2026-10-06
 

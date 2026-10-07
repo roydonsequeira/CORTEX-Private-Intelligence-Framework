@@ -13,6 +13,8 @@ class HealthResponse(BaseModel):
     """Structured runtime health response."""
 
     status: Literal["healthy", "degraded", "unhealthy"]
+    model_server: bool
+    # Deprecated: the same as model_server, for clients written for 1.x.
     ollama: bool
     chromadb: bool
     uptime_seconds: float
@@ -22,25 +24,25 @@ class HealthResponse(BaseModel):
 
 @router.get("/health")
 async def health(request: Request) -> HealthResponse:
-    """Return health for Ollama, Chroma, the configured models, and process uptime.
+    """Return health for the model server, Chroma, the configured models, and uptime.
 
-    ``degraded`` means Ollama is up but a configured model is not pulled (the
-    response names it) or no models exist at all.
+    ``degraded`` means the model server is up but a configured model is missing
+    (the response names it) or it has no models at all.
     """
     from quietpost.api.server import missing_models
 
-    provider = request.app.state.ollama_provider
+    provider = request.app.state.model_provider
     settings = getattr(request.app.state, "settings", None)
-    ollama = await provider.health_check()
+    reachable = await provider.health_check()
     models: list[str] = []
-    if ollama:
+    if reachable:
         try:
             models = await provider.list_models()
         except Exception:
             models = []
-    missing = missing_models(settings, set(models)) if ollama and settings else []
+    missing = missing_models(settings, set(models)) if reachable and settings else []
     chromadb = getattr(request.app.state.semantic_memory, "_collection", None) is not None
-    if not ollama:
+    if not reachable:
         status: Literal["healthy", "degraded", "unhealthy"] = "unhealthy"
     elif not models or missing:
         status = "degraded"
@@ -48,9 +50,10 @@ async def health(request: Request) -> HealthResponse:
         status = "healthy"
     return HealthResponse(
         status=status,
-        ollama=ollama,
+        model_server=reachable,
+        ollama=reachable,
         chromadb=chromadb,
         uptime_seconds=time.monotonic() - request.app.state.started_at,
-        model=settings.ollama_model if settings else None,
+        model=settings.chat_model if settings else None,
         missing_models=missing,
     )
