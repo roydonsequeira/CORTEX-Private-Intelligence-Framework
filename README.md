@@ -192,6 +192,8 @@ embed_model: text-embedding-nomic-embed-text-v1.5
 
 The chat model has to support tool calls. Start `llama-server` with `--jinja`, and vLLM with `--enable-auto-tool-choice` and the `--tool-call-parser` for your model (`hermes` for Qwen2.5). `quietpost doctor` checks that every configured model is there and lists the names the server uses.
 
+Give the model a context window of at least 8,192 tokens when you load it: LM Studio's Context Length setting, `llama-server -c 8192`, or vLLM's `--max-model-len 8192`. With Ollama, Quietpost sets this itself (`ollama_num_ctx`). Other servers decide it when they load the model, and a 4,096-token default is close to the size of Quietpost's longer prompts.
+
 The server must run on this computer or your local network, because your prompts and files go to it. Quietpost refuses a model server on a public internet address, whether you typed an IP address or a name that resolves to one.
 
 ## Tool System
