@@ -12,7 +12,7 @@ A hardening release. It closes the last four issues from the outside security
 review (#55–#58) and gives the UI a Content-Security-Policy. The review's 25
 security cases that were expected to fail now pass as ordinary tests.
 
-Tests: 318 → 370 on Linux CI, with nothing marked `xfail`.
+Tests: 318 → 372 on Linux CI, with nothing marked `xfail`.
 
 **Upgrading:** run `git pull`, then `pip install -e .`, and restart the UI so it
 sends the new headers. There are no new dependencies.
@@ -80,6 +80,13 @@ sends the new headers. There are no new dependencies.
   - a shell code block before the code, often `pip install pygame`, shifted how
     the code fences were paired, so a pygame game wasn't recognised and the model
     tried to run it in the sandbox.
+- **What you tell CORTEX about yourself is no longer lost when you write again
+  quickly.** CORTEX learns facts about you in the background after it answers. It
+  read your latest message back from the conversation, so if your next message
+  was already there, it read that one instead. "What's my name?" holds no facts,
+  so "My name is Roydon", said just before, was never stored. Now it learns from
+  the message it answered. A new chat started straight afterwards also waits a
+  moment for that learning to finish, so it already knows.
 
 ### Changed
 

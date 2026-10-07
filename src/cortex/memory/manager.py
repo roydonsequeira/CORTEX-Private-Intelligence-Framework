@@ -19,6 +19,9 @@ logger = structlog.get_logger(__name__)
 # documents from crowding the current request out of the context window.
 _MAX_HISTORY_CHARS = 1500
 _SEMANTIC_CONTEXT_TOP_K = 3
+# How long a request waits for facts still being learned from the turn before
+# it; past this, it goes ahead without them.
+_PENDING_FACTS_WAIT_SECONDS = 5.0
 
 
 class MemoryManager:
@@ -89,7 +92,11 @@ class MemoryManager:
 
         The current session's own dialogue is replayed separately by
         ``recent_history``; this block carries facts learned in other sessions.
+        Facts from a turn that has just ended are learned in the background, so
+        this waits for that first (briefly): otherwise a new session started
+        right after "My name is Roydon" doesn't know it yet.
         """
+        await self.drain(_PENDING_FACTS_WAIT_SECONDS)
         # Facts only: chunks of documents the user indexed are not things they said.
         entries = await self._semantic.retrieve_facts(
             MemoryQuery(text=query, top_k=_SEMANTIC_CONTEXT_TOP_K, memory_types=["semantic"])
@@ -109,24 +116,27 @@ class MemoryManager:
             + "\n".join(lines)
         )
 
-    async def end_session(self, session_id: str) -> None:
+    async def end_session(self, session_id: str, user_message: str | None = None) -> None:
         """Clear this session's working memory and consolidate it in the background.
 
         Consolidation calls the model, so it never runs on the request path: the
-        answer is returned immediately and facts are extracted afterwards.
+        answer is returned immediately and facts are extracted afterwards, from
+        ``user_message``, the message this turn answered. It is handed over
+        rather than read back from the history, which may already hold the
+        user's next message by the time the background task runs.
         """
         cleared = self._working.clear_session(session_id)
         logger.info("working_memory_cleared", session_id=session_id, entries=cleared)
         if not self._consolidation_enabled:
             return
-        task = asyncio.create_task(self._consolidate(session_id))
+        task = asyncio.create_task(self._consolidate(session_id, user_message))
         self._background.add(task)
         task.add_done_callback(self._background.discard)
 
-    async def _consolidate(self, session_id: str) -> None:
+    async def _consolidate(self, session_id: str, user_message: str | None) -> None:
         """Run semantic consolidation, logging (never raising) on failure."""
         try:
-            await self._semantic.consolidate(session_id)
+            await self._semantic.consolidate(session_id, user_message)
         except Exception as exc:  # consolidation is best-effort
             logger.warning("memory_consolidation_failed", session_id=session_id, error=str(exc))
 

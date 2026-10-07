@@ -704,6 +704,8 @@ async def test_session_history_is_replayed_and_turns_are_stored() -> None:
     assert ("s-1", "user", "What is my name?") in stored
     assert ("s-1", "assistant", "Your name is Roydon.") in stored
     assert state.final_answer == "Your name is Roydon."
+    # Facts are learned from this turn's message, not whatever the history holds later.
+    memory_manager.end_session.assert_awaited_once_with("s-1", "What is my name?")
 
 
 @pytest.mark.asyncio
