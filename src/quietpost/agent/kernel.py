@@ -502,7 +502,7 @@ class AgentKernel:
         if state.final_answer and not model_failed:
             await self._store(sid, "assistant", state.final_answer)
         try:
-            await self._memory_manager.end_session(sid)
+            await self._memory_manager.end_session(sid, state.user_input)
         except Exception as exc:
             logger.warning("end_session_failed", error=str(exc), session_id=sid)
 
