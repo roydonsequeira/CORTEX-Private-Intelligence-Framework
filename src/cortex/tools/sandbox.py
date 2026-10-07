@@ -45,7 +45,12 @@ from RestrictedPython.PrintCollector import PrintCollector
 
 from cortex.config.settings import Settings
 from cortex.observability.tracing import get_tracer
-from cortex.tools.workspace import check_readable_file, ensure_text, resolve_workspace_path
+from cortex.tools.workspace import (
+    check_readable_file,
+    ensure_text,
+    read_workspace_file,
+    resolve_workspace_path,
+)
 
 _tracer = get_tracer(__name__)
 
@@ -554,7 +559,7 @@ def _workspace_open(root: Path) -> Callable[..., io.StringIO | io.BytesIO]:
         if any(part.startswith(".") for part in relative.parts):
             raise PermissionError(f"hidden files cannot be opened in the sandbox: {display}")
         check_readable_file(path, display)
-        raw = path.read_bytes()
+        raw = read_workspace_file(root, path, display)
         ensure_text(raw, display)
         if "b" in mode:
             return io.BytesIO(raw)

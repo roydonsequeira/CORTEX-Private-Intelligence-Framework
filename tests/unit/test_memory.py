@@ -1,5 +1,6 @@
 """Unit tests for CORTEX memory tiers."""
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -155,6 +156,24 @@ async def test_memory_manager_retrieve_context_dedupes(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_retrieve_facts_leaves_out_document_chunks(tmp_path: Path) -> None:
+    """Chunks of indexed documents share the collection but are not facts about the user."""
+    semantic = SemanticMemory(
+        tmp_path / "chroma", "nomic-embed-text", _mock_provider(), client=chromadb.EphemeralClient()
+    )
+    for index, path in enumerate(["/ws/a.md", "/ws/a.md", "/ws/b.md"]):
+        await semantic.store(
+            _entry(f"chunk {index}", "semantic", source_path=path, chunk_index=index % 2)
+        )
+    assert await semantic.retrieve_facts(MemoryQuery(text="anything", top_k=5)) == []
+
+    await semantic.store(_entry("The user lives in Pune.", "semantic", source_session="s1"))
+    facts = await semantic.retrieve_facts(MemoryQuery(text="anything", top_k=5))
+
+    assert [entry.content for entry in facts] == ["The user lives in Pune."]
+
+
+@pytest.mark.asyncio
 async def test_semantic_and_procedural_share_one_chroma_client(tmp_path: Path) -> None:
     """Two PersistentClients on one path corrupt each other's HNSW view (chromadb 1.5
     raises "Nothing found on disk"); both tiers must reuse a single client."""
@@ -269,10 +288,72 @@ async def test_end_session_consolidates_in_background(tmp_path: Path) -> None:
     manager = _manager(tmp_path, provider, semantic)
     await manager.initialize()
 
-    await manager.end_session("s1")
+    await manager.end_session("s1", "I prefer local AI.")
     await manager.drain()
 
-    consolidate.assert_awaited_once_with("s1")
+    consolidate.assert_awaited_once_with("s1", "I prefer local AI.")
+
+
+_STATEMENT = "I prefer local-only AI, and my project is named CORTEX."
+
+
+@pytest.mark.asyncio
+async def test_facts_are_learned_from_the_message_the_turn_answered(tmp_path: Path) -> None:
+    """Live (plan cases 24 and 29): the user's next message reached the history
+    before the background task read it, so the model was shown "What's my name
+    and what am I learning?", found no facts, and the real ones were lost."""
+    provider = _mock_provider()
+    semantic = SemanticMemory(
+        tmp_path / "semantic",
+        "nomic-embed-text",
+        provider,
+        client=chromadb.EphemeralClient(),
+        collection_name="turn_message_test",
+    )
+    manager = _manager(tmp_path, provider, semantic)
+    await manager.initialize()
+    await manager.store_turn("s1", "user", _STATEMENT)
+
+    await manager.end_session("s1", _STATEMENT)
+    await manager.store_turn("s1", "user", "What is my project called?")  # the next message
+    await manager.drain()
+
+    call = cast(AsyncMock, provider.complete).await_args
+    assert call is not None
+    shown = call.args[1][1].content
+    assert "local-only AI" in shown
+    assert "What is my project called" not in shown
+    assert semantic._collection is not None
+    assert semantic._collection.count() == 2
+
+
+@pytest.mark.asyncio
+async def test_a_new_session_waits_for_facts_still_being_learned(tmp_path: Path) -> None:
+    """Live (plan case 25): asked "What do you know about me?" in a new session
+    straight after case 24, before its facts were stored, the model knew nothing."""
+    provider = _mock_provider()
+    complete = cast(AsyncMock, provider.complete)
+    learned = complete.return_value
+
+    async def slow_model(*args: object, **kwargs: object) -> ModelResponse:
+        await asyncio.sleep(0.2)
+        return cast(ModelResponse, learned)
+
+    complete.side_effect = slow_model
+    semantic = SemanticMemory(
+        tmp_path / "semantic",
+        "nomic-embed-text",
+        provider,
+        client=chromadb.EphemeralClient(),
+        collection_name="pending_facts_test",
+    )
+    manager = _manager(tmp_path, provider, semantic)
+    await manager.initialize()
+
+    await manager.end_session("s1", _STATEMENT)
+    context = await manager.retrieve_context("What do you know about me?", "s2")
+
+    assert "The user prefers local-only AI." in context
 
 
 def test_consolidation_keeps_only_durable_user_facts() -> None:

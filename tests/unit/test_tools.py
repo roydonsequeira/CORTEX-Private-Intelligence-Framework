@@ -1,5 +1,7 @@
 """Unit tests for tool registry and built-in tools."""
 
+import os
+import sys
 import textwrap
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -590,3 +592,100 @@ def test_executor_prompt_describes_python_file_access_per_backend() -> None:
     assert "Code cannot open files" in no_files
     assert "{python_files}" not in reads + no_files
     assert "never state the result a failed tool call was meant to compute" in reads
+
+
+@pytest.mark.asyncio
+async def test_filesystem_refuses_a_hard_link_to_another_file(tmp_path: Path) -> None:
+    """A file with a second name elsewhere is neither read nor replaced (#57)."""
+    root = tmp_path / "ws"
+    root.mkdir()
+    outside = tmp_path / "secret.txt"
+    outside.write_text("outside", encoding="utf-8")
+    try:
+        os.link(outside, root / "linked.txt")
+    except OSError:
+        pytest.skip("hard links unsupported here")
+    tool = FileSystemTool(allowed_root=root)
+
+    read = await tool.execute(action="read_file", path="linked.txt")
+    write = await tool.execute(action="write_file", path="linked.txt", content="x", overwrite=True)
+
+    assert read.success is False and "hard link" in (read.error or "")
+    assert write.success is False
+    assert outside.read_text(encoding="utf-8") == "outside"
+
+
+@pytest.mark.asyncio
+async def test_filesystem_overwrite_replaces_the_whole_file(tmp_path: Path) -> None:
+    """Content is written exactly; a shorter overwrite leaves no tail of the old file."""
+    tool = FileSystemTool(allowed_root=tmp_path)
+    await tool.execute(action="write_file", path="notes/a.txt", content="a long first line\n")
+    result = await tool.execute(action="write_file", path="notes/a.txt", content="ok", overwrite=True)
+    assert result.success is True
+    assert (tmp_path / "notes" / "a.txt").read_bytes() == b"ok"
+
+
+def _swap_in_junction(root: Path, outside: Path) -> None:
+    (root / "sub").rename(root / "sub-old")
+    if sys.platform == "win32":  # a junction needs no special rights, unlike a symlink
+        import _winapi
+
+        _winapi.CreateJunction(str(outside), str(root / "sub"))
+
+
+@pytest.fixture
+def junction_layout(tmp_path: Path) -> tuple[Path, Path]:
+    root = tmp_path / "ws"
+    (root / "sub").mkdir(parents=True)
+    (root / "sub" / "notes.txt").write_text("inside", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "notes.txt").write_text("OUTSIDE", encoding="utf-8")
+    return root, outside
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+@pytest.mark.asyncio
+async def test_windows_read_through_a_junction_swapped_in_after_the_check(
+    junction_layout: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cortex.tools.builtin import filesystem as fs_module
+    from cortex.tools.workspace import ensure_not_hidden
+
+    root, outside = junction_layout
+
+    def racing(root_arg: Path, path: Path) -> None:
+        ensure_not_hidden(root_arg, path)
+        _swap_in_junction(root, outside)
+
+    monkeypatch.setattr(fs_module, "ensure_not_hidden", racing)
+    tool = FileSystemTool(allowed_root=root)
+    result = await tool.execute(action="read_file", path="sub/notes.txt")
+
+    assert (root / "sub").is_junction(), "the swap did not happen"
+    assert result.success is False and "OUTSIDE" not in result.output
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+@pytest.mark.asyncio
+async def test_windows_new_file_through_a_junction_is_removed_unwritten(
+    junction_layout: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The open happens before the handle can be checked, so a file it created outside is deleted."""
+    from cortex.tools import workspace as workspace_module
+
+    root, outside = junction_layout
+    make_folders = workspace_module._make_folders
+
+    def racing(root_arg: Path, folder: Path, display: str) -> None:
+        make_folders(root_arg, folder, display)
+        _swap_in_junction(root, outside)
+
+    monkeypatch.setattr(workspace_module, "_make_folders", racing)
+    result = await FileSystemTool(allowed_root=root).execute(
+        action="write_file", path="sub/new.txt", content="agent"
+    )
+
+    assert (root / "sub").is_junction(), "the swap did not happen"
+    assert result.success is False
+    assert not (outside / "new.txt").exists()

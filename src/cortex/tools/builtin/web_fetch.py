@@ -132,7 +132,7 @@ class WebFetchTool(BaseTool):
     async def execute(self, **kwargs: object) -> ToolResult:
         """Fetch a URL and return readable content."""
         start = time.monotonic()
-        url = _normalise_url(str(kwargs["url"]))
+        url = normalise_url(str(kwargs["url"]))
         output_format: Literal["text", "markdown"] = (
             "markdown" if kwargs.get("format", "markdown") == "markdown" else "text"
         )
@@ -257,7 +257,7 @@ def _is_binary(content_type: str) -> bool:
     return media.startswith(_BINARY_TYPES)
 
 
-def _normalise_url(url: str) -> str:
+def normalise_url(url: str) -> str:
     """Trim quotes/whitespace and add https:// to scheme-less URLs ("example.com")."""
     cleaned = url.strip().strip("\"'<>")
     if cleaned and "://" not in cleaned:

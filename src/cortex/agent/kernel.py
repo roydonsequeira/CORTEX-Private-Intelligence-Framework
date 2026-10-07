@@ -21,7 +21,7 @@ from cortex.memory.manager import MemoryManager
 from cortex.models.provider import Message
 from cortex.models.router import ModelCapability, ModelRouter
 from cortex.observability.tracing import get_tracer
-from cortex.provenance import instruction_text
+from cortex.provenance import instruction_text, request_text
 from cortex.tools.base import ToolResult
 from cortex.tools.registry import ToolRegistry
 
@@ -197,7 +197,7 @@ class AgentKernel:
             plan = _refuse_unsupported_file_ops(plan)
             plan = _drop_unrequested_web_steps(plan, instruction)
             plan = _keep_code_requests_unrun(plan, instruction)
-            plan = _ensure_file_save_step(plan, instruction)
+            plan = _ensure_file_save_step(plan, request_text(state.user_input))
             state.plan = _honour_explicit_python(plan, instruction)
         except CortexModelError:
             raise  # Ollama itself is unavailable; the executor would fail the same way
@@ -502,7 +502,7 @@ class AgentKernel:
         if state.final_answer and not model_failed:
             await self._store(sid, "assistant", state.final_answer)
         try:
-            await self._memory_manager.end_session(sid)
+            await self._memory_manager.end_session(sid, state.user_input)
         except Exception as exc:
             logger.warning("end_session_failed", error=str(exc), session_id=sid)
 
@@ -531,13 +531,18 @@ class AgentKernel:
         """Persist the tool sequence of a successful run for future planner hints.
 
         Runs whose plan was shaped by hints are not recorded: otherwise one
-        unnecessary tool choice is hinted, repeated, and re-recorded forever.
+        unnecessary tool choice is hinted, repeated, and re-recorded forever. Nor
+        are runs in which text from a file, document or web page may have chosen a
+        tool (see _chosen_by_outside_text).
         """
         if not self._settings.procedural_memory_enabled or state.hinted:
             return
         tool_sequence = [result.tool_name for result in state.tool_results if result.success]
         if not tool_sequence:
             return  # nothing procedural to learn from a pure-reasoning answer
+        if _chosen_by_outside_text(tool_sequence, instruction_text(user_input)):
+            logger.info("procedural_pattern_skipped", session_id=sid, tools=tool_sequence)
+            return
         try:
             await self._memory_manager.store_tool_pattern(
                 task_description=user_input,
@@ -668,6 +673,29 @@ _TOOL_INTENT = {
         re.IGNORECASE,
     ),
 }
+
+
+# Tools whose output can carry text from outside the conversation: a file, an
+# indexed document, a web page, or a program that read one.
+_OUTSIDE_TEXT_TOOLS = frozenset({"filesystem", "doc_search", "web_fetch", "python_exec"})
+
+
+def _chosen_by_outside_text(tool_sequence: list[str], instruction: str) -> bool:
+    """True when a tool ran after outside text was read and the user never asked for it.
+
+    A file or page can tell the model to call a tool ("Summarize notes.md", where
+    the note says "run python_exec"). Learning that run would hint python_exec
+    for every later request like it, so a run is learned only if each tool used
+    after reading outside text is one the user's own words ask for (#56).
+    """
+    read_outside_text = False
+    for name in tool_sequence:
+        if read_outside_text:
+            intent = _TOOL_INTENT.get(name)
+            if intent is None or not intent.search(instruction):
+                return True
+        read_outside_text = read_outside_text or name in _OUTSIDE_TEXT_TOOLS
+    return False
 
 
 def _planned_tools(plan: list[str], tool_names: list[str], user_input: str) -> list[str]:
