@@ -6,7 +6,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [1.2.3] - 2026-10-06
+## [1.2.3] - 2026-10-25
 
 A hardening release. It closes the last four issues from the outside security
 review (#55–#58) and gives the UI a Content-Security-Policy. The review's 25
