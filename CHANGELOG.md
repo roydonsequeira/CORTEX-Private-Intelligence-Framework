@@ -12,7 +12,7 @@ A hardening release. It closes the last four issues from the outside security
 review (#55–#58) and gives the UI a Content-Security-Policy. The review's 25
 security cases that were expected to fail now pass as ordinary tests.
 
-Tests: 318 → 372 on Linux CI, with nothing marked `xfail`.
+Tests: 318 → 375 on Linux CI, with nothing marked `xfail`.
 
 **Upgrading:** run `git pull`, then `pip install -e .`, and restart the UI so it
 sends the new headers. There are no new dependencies.
@@ -45,12 +45,15 @@ sends the new headers. There are no new dependencies.
   `doc_search`.
 - **Files are opened so that another program can't redirect them (#57).** The path
   is checked by name, so a program running on the same machine could swap a
-  folder for a link between the check and the open. Now:
+  folder for a link between the check and the open. Now, whether a file is read,
+  written or indexed with `doc_search`:
   - on Linux and macOS, files are opened folder by folder without following links;
   - on Windows, the open file's real path is checked before anything is read or
     written, and a file created through a swapped-in junction is removed again;
   - a file with a second name (a hard link) is neither read nor replaced;
-  - "don't overwrite" holds even if the file appears after the check.
+  - "don't overwrite" holds even if the file appears after the check;
+  - a named pipe put in place of a file is refused at once instead of hanging the
+    write.
 
   The agent itself can't create links; this protects against other programs.
 - **`web_fetch` never widens the address you wrote (#58).** An address you wrote

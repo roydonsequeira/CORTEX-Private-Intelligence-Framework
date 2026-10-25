@@ -8,6 +8,7 @@ the swap really happened, so a refactor that skips the hooked call cannot make
 it pass by accident.
 """
 
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -16,8 +17,11 @@ from typing import Any
 
 import pytest
 
+from cortex.memory.base import MemoryEntry
 from cortex.tools import sandbox as sandbox_module
+from cortex.tools.builtin import doc_search as doc_search_module
 from cortex.tools.builtin import filesystem as fs_module
+from cortex.tools.builtin.doc_search import DocumentSearchTool
 from cortex.tools.builtin.filesystem import FileSystemTool
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink/hardlink semantics")
@@ -50,6 +54,17 @@ def _swap_after(
         return result
 
     monkeypatch.setattr(module, name, racing)
+
+
+class _Index:
+    """Stands in for semantic memory: keeps the text doc_search indexes."""
+
+    def __init__(self) -> None:
+        self.texts: list[str] = []
+
+    async def store(self, entry: MemoryEntry) -> str:
+        self.texts.append(entry.content)
+        return entry.id
 
 
 @pytest.mark.asyncio
@@ -88,6 +103,21 @@ def test_sandbox_open_after_symlink_swap_stays_in_workspace(
 
 
 @pytest.mark.asyncio
+async def test_index_after_symlink_swap_stays_in_workspace(
+    layout: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """doc_search hands a file's text to the model too, so indexing can't follow the swap."""
+    root, outside = layout
+    _swap_after(doc_search_module, "check_readable_file", monkeypatch, root, outside)
+    index = _Index()
+    tool = DocumentSearchTool(index, allowed_root=root)  # type: ignore[arg-type]
+    result = await tool.execute(action="index_document", path="sub/notes.txt")
+    assert (root / "sub").is_symlink(), "the swap did not happen"
+    assert result.success is False
+    assert not any(SECRET in text for text in index.texts)
+
+
+@pytest.mark.asyncio
 async def test_static_symlink_out_of_workspace_is_refused(layout: tuple[Path, Path]) -> None:
     """Existing control preserved: a symlink that already points outside is refused."""
     root, outside = layout
@@ -109,6 +139,20 @@ async def test_hardlink_to_outside_file_is_not_read(layout: tuple[Path, Path]) -
 
 
 @pytest.mark.asyncio
+async def test_hardlink_to_outside_file_is_not_indexed(layout: tuple[Path, Path]) -> None:
+    root, outside = layout
+    try:
+        os.link(outside / "notes.txt", root / "hard.txt")
+    except OSError:
+        pytest.skip("hardlinks unsupported here")
+    index = _Index()
+    tool = DocumentSearchTool(index, allowed_root=root)  # type: ignore[arg-type]
+    result = await tool.execute(action="index_document", path="hard.txt")
+    assert result.success is False
+    assert not any(SECRET in text for text in index.texts)
+
+
+@pytest.mark.asyncio
 async def test_hardlinked_file_is_not_overwritten(layout: tuple[Path, Path]) -> None:
     """Replacing a hard-linked file would change the outside file too."""
     root, outside = layout
@@ -120,6 +164,26 @@ async def test_hardlinked_file_is_not_overwritten(layout: tuple[Path, Path]) -> 
     result = await tool.execute(action="write_file", path="hard.txt", content="x", overwrite=True)
     assert result.success is False
     assert (outside / "notes.txt").read_text(encoding="utf-8") == SECRET
+
+
+@pytest.mark.asyncio
+async def test_overwriting_a_fifo_fails_instead_of_waiting(layout: tuple[Path, Path]) -> None:
+    """Opening a FIFO to write waits for a reader, so one put where a file was must not hang."""
+    if sys.platform == "win32":  # skipped there with the module; this tells mypy, too
+        return
+    root, _ = layout
+    fifo = root / "notes.md"
+    os.mkfifo(fifo)
+    write = FileSystemTool(root).execute(
+        action="write_file", path="notes.md", content="x", overwrite=True
+    )
+    try:
+        result = await asyncio.wait_for(write, 5)
+    finally:
+        # Free an open() still waiting for a reader, so a regression fails instead of hanging.
+        os.close(os.open(fifo, os.O_RDONLY | os.O_NONBLOCK))
+    assert result.success is False
+    assert result.error == "Not a file: notes.md"
 
 
 @pytest.mark.asyncio

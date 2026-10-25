@@ -16,6 +16,7 @@ from cortex.tools.workspace import (
     check_readable_file,
     ensure_not_hidden,
     ensure_text,
+    read_workspace_file,
     resolve_workspace_path,
 )
 
@@ -155,7 +156,13 @@ class DocumentSearchTool(BaseTool):
         # 1 MB and text only, like read_file: a large or binary file would be
         # split into thousands of chunks, each one an embedding call.
         check_readable_file(doc_path, path)
-        raw = await anyio.Path(doc_path).read_bytes()
+        if self._allowed_root is None:
+            raw = await anyio.Path(doc_path).read_bytes()
+        else:
+            # Opened so that a link swapped in after the checks can't redirect it (#57).
+            raw = await anyio.to_thread.run_sync(
+                read_workspace_file, self._allowed_root, doc_path, path
+            )
         ensure_text(raw, path)
         content = raw.decode("utf-8", errors="replace")
         chunks = _chunk_document(content, chunk_size=chunk_size, overlap=overlap)
