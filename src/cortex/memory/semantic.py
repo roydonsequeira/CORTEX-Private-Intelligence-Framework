@@ -198,21 +198,56 @@ class SemanticMemory(BaseMemory):
             )
         return _entries_from_query_result(result)
 
-    async def consolidate(self, session_id: str) -> None:
-        """Learn durable facts about the user from their latest message and store them.
+    async def retrieve_facts(self, query: MemoryQuery) -> list[MemoryEntry]:
+        """Like retrieve, but only facts about the user, never document chunks.
 
-        Only the user's statements about themselves are read (see
-        ``self_statements``): the consolidation model never sees material the user
-        handed over, or the answer that repeats it, and each fact it returns is
-        kept only if the user's own words back it (see ``_is_grounded``). Each
-        exchange is consolidated once. Fact ids are derived from the normalised
-        text, so re-learning the same fact updates it instead of duplicating it.
+        doc_search keeps the chunks of indexed documents in this collection too,
+        marked with ``source_path`` and ``chunk_index``. A chunk is the
+        document's text, not something the user said, so it must not reach the
+        model as a fact about them.
         """
-        if self._episodic_memory is None:
-            logger.debug("semantic_consolidation_skipped_no_episodic", session_id=session_id)
-            return
-        history = await self._episodic_memory.get_session_history(session_id)
-        latest = next((m.content for m in reversed(history) if m.role == "user"), "")
+        await self.initialize()
+        assert self._collection is not None
+        chunks = self._collection.get(where={"chunk_index": {"$gte": 0}}, include=["metadatas"])
+        facts = self._collection.count() - len(chunks["ids"])
+        if facts <= 0:
+            return []
+        paths = sorted(
+            {str(meta["source_path"]) for meta in chunks["metadatas"] or [] if meta and "source_path" in meta}
+        )
+        with _tracer.start_as_current_span("memory.semantic.retrieve") as span:
+            span.set_attribute("memory.collection", self._collection_name)
+            span.set_attribute("memory.top_k", query.top_k)
+            if query.session_id:
+                span.set_attribute("session_id", query.session_id)
+            embedding = (await self._provider.embed(self._embed_model, query.text))[0]
+            result = self._collection.query(
+                query_embeddings=[embedding],
+                n_results=min(query.top_k, facts),
+                # Chroma keeps records without the key: here, the facts.
+                where={"source_path": {"$nin": paths}} if paths else None,
+            )
+        return _entries_from_query_result(result)
+
+    async def consolidate(self, session_id: str, user_message: str | None = None) -> None:
+        """Learn durable facts about the user from one of their messages and store them.
+
+        ``user_message`` is the message a turn answered; without it, the latest
+        user message in the session's history is used. Only the user's
+        statements about themselves are read (see ``self_statements``): the
+        consolidation model never sees material the user handed over, or the
+        answer that repeats it, and each fact it returns is kept only if the
+        user's own words back it (see ``_is_grounded``). Each exchange is
+        consolidated once. Fact ids are derived from the normalised text, so
+        re-learning the same fact updates it instead of duplicating it.
+        """
+        latest = user_message
+        if latest is None:
+            if self._episodic_memory is None:
+                logger.debug("semantic_consolidation_skipped_no_episodic", session_id=session_id)
+                return
+            history = await self._episodic_memory.get_session_history(session_id)
+            latest = next((m.content for m in reversed(history) if m.role == "user"), "")
         if len(latest.strip()) < _MIN_CONSOLIDATION_CHARS:
             return  # greetings and one-word turns carry nothing worth remembering
         statements = self_statements(latest)

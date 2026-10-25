@@ -78,7 +78,7 @@ def test_new_code_in_the_request_goes_to_the_model() -> None:
     assert cannot_run_reply("run this:\n```python\nprint(1)\n```", _history(_SNAKE)) is None
 
 
-def test_unknown_package_is_named_with_install_command() -> None:
+def test_known_package_is_named_with_install_command() -> None:
     reply = cannot_run_reply("execute it", _history("```python\nimport numpy as np\n```"))
 
     assert reply is not None
@@ -91,6 +91,63 @@ def test_install_command_uses_pip_package_names() -> None:
 
     assert reply is not None
     assert "pip install requests beautifulsoup4" in reply
+
+
+def test_made_up_module_gets_no_install_command() -> None:
+    """A module name a model made up must not become a `pip install` line:
+    packages get registered under such names to catch people who run it."""
+    reply = cannot_run_reply("run it", _history("```python\nimport palindrome_utils\n```"))
+
+    assert reply is not None
+    assert "`palindrome_utils`" in reply
+    assert "pip install" not in reply
+
+
+_PALINDROME = """```python
+def is_palindrome(text: str) -> bool:
+    cleaned = "".join(c.lower() for c in text if c.isalnum())
+    return cleaned == cleaned[::-1]
+
+print(is_palindrome("racecar"))
+```"""
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        # It imports only what the answer's own code defines.
+        "```python\nfrom palindrome_checker import is_palindrome\n\n"
+        'print(is_palindrome("abba"))\n```',
+        # It imports the file the answer says to save the code as.
+        "Save it as `palindrome_checker.py`, then:\n\n```python\nimport palindrome_checker\n\n"
+        'print(palindrome_checker.is_palindrome("abba"))\n```',
+    ],
+    ids=["from-import", "py-file"],
+)
+def test_usage_example_importing_the_program_goes_to_the_model(usage: str) -> None:
+    """Live (battery case 22): a "how to use it" example importing the program
+    from its own file was taken for a missing package, so a working program
+    was refused."""
+    answer = f"{_PALINDROME}\n\nTo use it from another script:\n\n{usage}"
+
+    assert cannot_run_reply('run it on "racecar" and "hello"', _history(answer)) is None
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        # Live (battery case 18): a ```bash block first shifted which fences were
+        # paired, so the check read the text between the blocks, not the code.
+        f"Install pygame first:\n\n```bash\npip install pygame\n```\n\n{_SNAKE}",
+        _SNAKE.replace("```python", "```python3"),
+    ],
+    ids=["after-bash-block", "python3-fence"],
+)
+def test_code_after_a_shell_block_or_a_python3_fence_is_checked(answer: str) -> None:
+    reply = cannot_run_reply("run the code and send me the output", _history(answer))
+
+    assert reply is not None
+    assert "pip install pygame" in reply
 
 
 def test_blocked_stdlib_module_is_named() -> None:

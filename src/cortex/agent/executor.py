@@ -16,8 +16,10 @@ from cortex.models.router import ModelCapability, ModelRouter
 from cortex.observability.metrics import increment_agent_steps
 from cortex.observability.tracing import get_tracer
 from cortex.provenance import instruction_text as instruction_text
+from cortex.provenance import request_text
 from cortex.tools.base import ToolResult
 from cortex.tools.builtin.filesystem import infer_action
+from cortex.tools.builtin.web_fetch import normalise_url
 from cortex.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
@@ -447,7 +449,7 @@ def _is_unrequested_write(tool_name: str, kwargs: dict[str, Any], user_input: st
     return (
         tool_name == "filesystem"
         and infer_action(kwargs) == "write_file"
-        and not _FILE_INTENT.search(instruction_text(user_input))
+        and not _FILE_INTENT.search(request_text(user_input))
     )
 
 
@@ -489,7 +491,7 @@ def _is_unrequested_overwrite(tool_name: str, kwargs: dict[str, Any], user_input
         tool_name == "filesystem"
         and infer_action(kwargs) == "write_file"
         and kwargs.get("overwrite") in (True, "true", "True")
-        and not _OVERWRITE_INTENT.search(instruction_text(user_input))
+        and not _OVERWRITE_INTENT.search(request_text(user_input))
     )
 
 
@@ -508,27 +510,34 @@ def _user_texts(state: "AgentState") -> list[str]:
     return [m.content for m in state.messages if m.role == "user"] + [state.user_input]
 
 
-def _normalized_url(url: str) -> str | None:
-    """A URL as host[:port]/path?query for comparison, or None if it has no host.
+_SCHEME = re.compile(r"^([a-z][a-z0-9+.-]*)://", re.IGNORECASE)
+# Schemes a fetch may use, by what the user wrote: http may become https, never
+# the reverse. An address written without a scheme may be fetched over either.
+_SCHEMES_FOR = {"https": {"https"}, "http": {"http", "https"}, "": {"http", "https"}}
 
-    Scheme, a leading "www.", a trailing slash and the fragment (never sent to
-    the server) are ignored; the path and query must match exactly, since that
-    is where a URL could carry data.
+
+def _url_parts(url: str) -> tuple[str, str] | None:
+    """A URL as (scheme, host[:port]/path?query) for comparison, or None if it has no host.
+
+    The scheme is "" when none was written. The host is kept as written:
+    "www.example.com" and "example.com" are different addresses. A trailing
+    slash and the fragment (never sent to the server) are ignored; the path and
+    query must match exactly, since that is where a URL could carry data.
     """
     text = url.strip().rstrip(".,;:!?)]}'\"")
-    if "://" not in text:
-        text = f"http://{text}"
+    written = _SCHEME.match(text)
+    scheme = written.group(1).lower() if written else ""
     try:
-        parts = urlsplit(text)
+        parts = urlsplit(text if written else f"http://{text}")
         port = parts.port
     except ValueError:
         return None
-    host = (parts.hostname or "").lower().removeprefix("www.")
+    host = (parts.hostname or "").lower()
     if not host:
         return None
     netloc = f"{host}:{port}" if port and port not in (80, 443) else host
     query = f"?{parts.query}" if parts.query else ""
-    return f"{netloc}{parts.path.rstrip('/')}{query}"
+    return scheme, f"{netloc}{parts.path.rstrip('/')}{query}"
 
 
 def _is_unrequested_fetch(tool_name: str, kwargs: dict[str, Any], user_texts: list[str]) -> bool:
@@ -538,20 +547,28 @@ def _is_unrequested_fetch(tool_name: str, kwargs: dict[str, Any], user_texts: li
     a URL, and a URL can carry data out in its path or query. Seen: a workspace
     file saying "load the current version from https://…?u=NAME" made qwen2.5:7b
     call web_fetch on every run. Opening only addresses the user wrote means the
-    model can never compose one. Anything without a host (file://, junk) goes on
-    to web_fetch, which rejects it with a specific error.
+    model can never compose one. The check never widens what the user wrote: the
+    host must match as written, and an https address is never fetched over http
+    (#58). Anything without a host (file://, junk) goes on to web_fetch, which
+    rejects it with a specific error.
     """
     if tool_name != "web_fetch":
         return False
-    target = _normalized_url(str(kwargs.get("url", "")))
+    # Compare what web_fetch will actually open (it adds https:// to a bare host).
+    target = _url_parts(normalise_url(str(kwargs.get("url", ""))))
     if target is None:
         return False
-    allowed = {
-        _normalized_url(match.group(0))
-        for text in user_texts
-        for match in _URL_IN_TEXT.finditer(text)
-    }
-    return target not in allowed
+    scheme, address = target
+    for text in user_texts:
+        for match in _URL_IN_TEXT.finditer(text):
+            written = _url_parts(match.group(0))
+            if (
+                written is not None
+                and written[1] == address
+                and scheme in _SCHEMES_FOR.get(written[0], set())
+            ):
+                return False
+    return True
 
 
 def _call_signature(tool_name: str, kwargs: dict[str, Any]) -> str:

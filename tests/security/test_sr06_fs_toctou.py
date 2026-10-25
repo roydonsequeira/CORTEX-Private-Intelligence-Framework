@@ -1,11 +1,14 @@
-"""SR-06 — path check and file open are not atomic (acknowledged, low priority).
+"""SR-06 — path check and file open are not atomic (#57, closed in 1.2.3).
 
 Only a controlled temp directory is used. The race is made deterministic by
 swapping a directory for a symlink right after the path policy has approved
 it, which is what a second local process would have to win. The agent itself
-cannot create links, so these are hardening tests.
+cannot create links, so these are hardening tests. Each race test asserts that
+the swap really happened, so a refactor that skips the hooked call cannot make
+it pass by accident.
 """
 
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -14,8 +17,11 @@ from typing import Any
 
 import pytest
 
+from cortex.memory.base import MemoryEntry
 from cortex.tools import sandbox as sandbox_module
+from cortex.tools.builtin import doc_search as doc_search_module
 from cortex.tools.builtin import filesystem as fs_module
+from cortex.tools.builtin.doc_search import DocumentSearchTool
 from cortex.tools.builtin.filesystem import FileSystemTool
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink/hardlink semantics")
@@ -42,43 +48,73 @@ def _swap_after(
 
     def racing(*args: Any, **kwargs: Any) -> Any:
         result = original(*args, **kwargs)
-        (root / "sub").rename(root / "sub-old")
-        os.symlink(outside, root / "sub")
+        if not (root / "sub").is_symlink():
+            (root / "sub").rename(root / "sub-old")
+            os.symlink(outside, root / "sub")
         return result
 
     monkeypatch.setattr(module, name, racing)
 
 
+class _Index:
+    """Stands in for semantic memory: keeps the text doc_search indexes."""
+
+    def __init__(self) -> None:
+        self.texts: list[str] = []
+
+    async def store(self, entry: MemoryEntry) -> str:
+        self.texts.append(entry.content)
+        return entry.id
+
+
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="#57 SR-06: open follows a symlink swapped in after the check")
 async def test_read_after_symlink_swap_stays_in_workspace(
     layout: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root, outside = layout
     _swap_after(fs_module, "ensure_not_hidden", monkeypatch, root, outside)
     result = await FileSystemTool(root).execute(action="read_file", path="sub/notes.txt")
+    assert (root / "sub").is_symlink(), "the swap did not happen"
+    assert result.success is False
     assert SECRET not in result.output
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="#57 SR-06: write follows a symlink swapped in after the check")
 async def test_write_after_symlink_swap_stays_in_workspace(
     layout: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root, outside = layout
     _swap_after(fs_module, "ensure_not_hidden", monkeypatch, root, outside)
-    await FileSystemTool(root).execute(action="write_file", path="sub/new.txt", content="x")
+    result = await FileSystemTool(root).execute(action="write_file", path="sub/new.txt", content="x")
+    assert (root / "sub").is_symlink(), "the swap did not happen"
+    assert result.success is False
     assert not (outside / "new.txt").exists()
 
 
-@pytest.mark.xfail(strict=True, reason="#57 SR-06: sandbox open() has the same check/use window")
 def test_sandbox_open_after_symlink_swap_stays_in_workspace(
     layout: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root, outside = layout
     _swap_after(sandbox_module, "check_readable_file", monkeypatch, root, outside)
     opener = sandbox_module._workspace_open(root.resolve())
-    assert SECRET not in opener("sub/notes.txt").read()
+    with pytest.raises(OSError, match="changed after it was checked"):
+        opener("sub/notes.txt")
+    assert (root / "sub").is_symlink(), "the swap did not happen"
+
+
+@pytest.mark.asyncio
+async def test_index_after_symlink_swap_stays_in_workspace(
+    layout: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """doc_search hands a file's text to the model too, so indexing can't follow the swap."""
+    root, outside = layout
+    _swap_after(doc_search_module, "check_readable_file", monkeypatch, root, outside)
+    index = _Index()
+    tool = DocumentSearchTool(index, allowed_root=root)  # type: ignore[arg-type]
+    result = await tool.execute(action="index_document", path="sub/notes.txt")
+    assert (root / "sub").is_symlink(), "the swap did not happen"
+    assert result.success is False
+    assert not any(SECRET in text for text in index.texts)
 
 
 @pytest.mark.asyncio
@@ -91,7 +127,6 @@ async def test_static_symlink_out_of_workspace_is_refused(layout: tuple[Path, Pa
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="#57 SR-06: a hardlink made by another process is read through")
 async def test_hardlink_to_outside_file_is_not_read(layout: tuple[Path, Path]) -> None:
     root, outside = layout
     try:
@@ -99,25 +134,77 @@ async def test_hardlink_to_outside_file_is_not_read(layout: tuple[Path, Path]) -
     except OSError:
         pytest.skip("hardlinks unsupported here")
     result = await FileSystemTool(root).execute(action="read_file", path="hard.txt")
+    assert result.success is False
     assert SECRET not in result.output
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="#57 SR-06: exists() then write is not O_EXCL")
+async def test_hardlink_to_outside_file_is_not_indexed(layout: tuple[Path, Path]) -> None:
+    root, outside = layout
+    try:
+        os.link(outside / "notes.txt", root / "hard.txt")
+    except OSError:
+        pytest.skip("hardlinks unsupported here")
+    index = _Index()
+    tool = DocumentSearchTool(index, allowed_root=root)  # type: ignore[arg-type]
+    result = await tool.execute(action="index_document", path="hard.txt")
+    assert result.success is False
+    assert not any(SECRET in text for text in index.texts)
+
+
+@pytest.mark.asyncio
+async def test_hardlinked_file_is_not_overwritten(layout: tuple[Path, Path]) -> None:
+    """Replacing a hard-linked file would change the outside file too."""
+    root, outside = layout
+    try:
+        os.link(outside / "notes.txt", root / "hard.txt")
+    except OSError:
+        pytest.skip("hardlinks unsupported here")
+    tool = FileSystemTool(root)
+    result = await tool.execute(action="write_file", path="hard.txt", content="x", overwrite=True)
+    assert result.success is False
+    assert (outside / "notes.txt").read_text(encoding="utf-8") == SECRET
+
+
+@pytest.mark.asyncio
+async def test_overwriting_a_fifo_fails_instead_of_waiting(layout: tuple[Path, Path]) -> None:
+    """Opening a FIFO to write waits for a reader, so one put where a file was must not hang."""
+    if sys.platform == "win32":  # skipped there with the module; this tells mypy, too
+        return
+    root, _ = layout
+    fifo = root / "notes.md"
+    os.mkfifo(fifo)
+    write = FileSystemTool(root).execute(
+        action="write_file", path="notes.md", content="x", overwrite=True
+    )
+    try:
+        result = await asyncio.wait_for(write, 5)
+    finally:
+        # Free an open() still waiting for a reader, so a regression fails instead of hanging.
+        os.close(os.open(fifo, os.O_RDONLY | os.O_NONBLOCK))
+    assert result.success is False
+    assert result.error == "Not a file: notes.md"
+
+
+@pytest.mark.asyncio
 async def test_no_overwrite_holds_if_file_appears_after_the_check(
     layout: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root, _ = layout
     target = root / "late.txt"
     real_exists = Path.exists
+    appeared = []
 
     def exists_then_create(self: Path, *a: Any, **k: Any) -> bool:
         seen = real_exists(self, *a, **k)
         if self == target and not seen:
             target.write_text("user data", encoding="utf-8")
+            appeared.append(self)
         return seen
 
     monkeypatch.setattr(Path, "exists", exists_then_create)
-    await FileSystemTool(root).execute(action="write_file", path="late.txt", content="agent")
+    result = await FileSystemTool(root).execute(action="write_file", path="late.txt", content="agent")
     monkeypatch.undo()
+    assert appeared, "the file did not appear after the check"
+    assert result.success is False
     assert target.read_text(encoding="utf-8") == "user data"
