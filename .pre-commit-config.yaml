@@ -2,6 +2,9 @@
 #   pip install pre-commit && pre-commit install
 # Run against everything with:
 #   pre-commit run --all-files
+#
+# ruff and mypy run from your dev environment (pip install -e ".[dev]"), so they
+# use the same versions as CI, and mypy can see CORTEX's installed dependencies.
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -13,19 +16,16 @@ repos:
       - id: check-merge-conflict
       - id: check-added-large-files
 
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.6
+  - repo: local
     hooks:
       - id: ruff
-        args: [--fix]
-
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.14.1
-    hooks:
+        name: ruff
+        entry: python -m ruff check --fix
+        language: system
+        types: [python]
       - id: mypy
-        args: [--strict, --config-file=pyproject.toml]
-        files: ^(src|tests)/
-        additional_dependencies:
-          - pydantic
-          - types-pyyaml
-          - types-jsonschema
+        name: mypy
+        entry: python -m mypy src tests
+        language: system
+        types: [python]
+        pass_filenames: false

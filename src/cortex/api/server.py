@@ -4,6 +4,7 @@ import asyncio
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any, cast
 
 import structlog
@@ -39,12 +40,20 @@ from cortex.tools.registry import ToolRegistry
 logger = structlog.get_logger(__name__)
 
 
+def _package_version() -> str:
+    """The installed cortex-agent version, so the API docs match pyproject.toml."""
+    try:
+        return version("cortex-agent")
+    except PackageNotFoundError:  # running from a source tree that was never installed
+        return "0+unknown"
+
+
 def create_app() -> FastAPI:
     """Return the CORTEX FastAPI application."""
     app = FastAPI(
         title="CORTEX",
         description="Private Intelligence Framework — fully local AI agent.",
-        version="1.1.0",
+        version=_package_version(),
         lifespan=_lifespan,
     )
     settings = get_settings()

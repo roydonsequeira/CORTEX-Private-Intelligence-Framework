@@ -42,10 +42,15 @@ class APIKeyMiddleware:
 
     def _is_exempt(self, path: str) -> bool:
         """Return True for public paths that never require a key."""
-        return any(path.startswith(prefix) for prefix in _EXEMPT_PREFIXES)
+        # Whole path segments only: a later route such as /health-report must not
+        # become public just because it starts with /health.
+        return any(path == prefix or path.startswith(f"{prefix}/") for prefix in _EXEMPT_PREFIXES)
 
     def _is_authorized(self, request: Request) -> bool:
         """Constant-time compare the Authorization header against the configured key."""
-        header = request.headers.get("authorization", "")
-        expected = f"Bearer {self._api_key}"
+        # Compare bytes: compare_digest raises TypeError on a str with non-ASCII
+        # characters, which any client could send. Starlette decodes headers as
+        # Latin-1, so encoding back recovers the bytes on the wire.
+        header = request.headers.get("authorization", "").encode("latin-1")
+        expected = f"Bearer {self._api_key}".encode()
         return hmac.compare_digest(header, expected)

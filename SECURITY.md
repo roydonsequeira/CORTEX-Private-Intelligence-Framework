@@ -48,6 +48,8 @@ In scope:
   `doc_search` or `python_exec`'s read-only `open()`, writes through `open()`,
   extension bypass, reading hidden files such as `.env`, writing into CORTEX's
   own code or plugins folder),
+- ways for text the agent reads (a file, a document, a web page) to make it send
+  data off the machine, for example through a fetched URL or an image in an answer,
 - authentication/authorization bypasses when `api_key` is configured,
 - request handling that lets one client affect another,
 - ways for a web page or another origin to reach a default (loopback) instance.
