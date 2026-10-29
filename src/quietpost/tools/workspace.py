@@ -1,10 +1,11 @@
-"""Workspace path policy shared by the filesystem tool and the Python sandbox.
+"""Workspace path policy shared by the filesystem tool, doc_search and the Python sandbox.
 
-Both read files for the model, so both must agree on what "inside the
-workspace" means; keeping the rules here stops the two from drifting apart.
+All three read files for the model, so they must agree on what "inside the
+workspace" means; keeping the rules here stops them from drifting apart.
 """
 
 import contextlib
+import errno
 import os
 import re
 import stat
@@ -106,7 +107,7 @@ _HARD_LINKED = (
     "Access denied: {display} has another name outside the workspace (a hard "
     "link). It was not opened."
 )
-_O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)  # a FIFO swapped in must not block the read
+_O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)  # a FIFO swapped in must not block the open
 
 
 def read_workspace_file(root: Path, path: Path, display: str) -> bytes:
@@ -140,7 +141,7 @@ def write_workspace_file(
     except FileExistsError:
         if not overwrite:
             raise
-        fd = _open_confined(root, path, os.O_WRONLY, display)
+        fd = _open_confined(root, path, os.O_WRONLY | _O_NONBLOCK, display)
     with os.fdopen(fd, "wb") as handle:
         _ensure_plain_file(os.fstat(handle.fileno()), display)
         handle.truncate(0)
@@ -228,9 +229,11 @@ else:
         """
         try:
             return os.open(name, flags | os.O_NOFOLLOW | os.O_CLOEXEC, 0o666, dir_fd=dir_fd)
-        except OSError:
+        except OSError as exc:
             if _is_link(name, dir_fd):
                 raise OSError(_LINK_SWAPPED.format(display=display)) from None
+            if exc.errno == errno.ENXIO:  # a FIFO opened to write with no reader, or a socket
+                raise OSError(f"Not a file: {display}") from None
             raise
 
     def _walk(root: Path, folders: tuple[str, ...], display: str, create: bool) -> int:
