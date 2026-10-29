@@ -77,7 +77,7 @@ flowchart TB
 
 ## Quick Start
 
-**Prerequisites:** [Ollama](https://ollama.com), Python 3.12+, Node.js 20.9+ for the UI (24 LTS recommended). About 6 GB of disk for the default models; a GPU with 6 GB+ VRAM is recommended (CPU works, slowly).
+**Prerequisites:** [Ollama](https://ollama.com), Python 3.12+, Node.js 20.9+ for the UI (26 LTS recommended). About 6 GB of disk for the default models; a GPU with 6 GB+ VRAM is recommended (CPU works, slowly).
 
 ### Native (recommended for development)
 

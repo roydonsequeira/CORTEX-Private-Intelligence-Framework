@@ -6,6 +6,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- The UI's Docker image and CI job run on Node.js 26 LTS (Active LTS since 28
+  October 2026); the UI still needs Node.js 20.9 or newer.
+
 ## [1.2.3] - 2026-10-25
 
 A hardening release. It closes the last four issues from the outside security
