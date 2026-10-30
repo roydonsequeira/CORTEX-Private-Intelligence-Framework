@@ -56,6 +56,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The UI's Docker image and CI job run on Node.js 26 LTS (Active LTS since 28
   October 2026); the UI still needs Node.js 20.9 or newer.
 
+### Fixed
+
+- **Memory no longer breaks on Windows.** In about one memory store in 64, one of
+  the two memory collections, facts or tool patterns, failed every read with
+  "Error creating hnsw segment reader: Nothing found on disk", and restarting
+  didn't help. Chroma 1.5.9 keeps a small collection's index only in a cache. On
+  Windows that cache has room for one index per shard, so the two collections
+  could push each other out. Quietpost now raises the limit Chroma sizes the cache
+  from, which gives each shard room for six. On Linux and macOS the open-file
+  limit is raised to 2,048 when it's lower. A store that already fails works again
+  with everything in it, so there's no need to reset memory.
+
 ## [1.2.3] - 2026-10-25
 
 A hardening release. It closes the last four issues from the outside security

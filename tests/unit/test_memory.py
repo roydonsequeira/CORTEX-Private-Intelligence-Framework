@@ -191,6 +191,22 @@ async def test_semantic_and_procedural_share_one_chroma_client(tmp_path: Path) -
         assert await semantic.retrieve(MemoryQuery(text="fact", top_k=3))
 
 
+def test_chroma_client_keeps_every_small_collection_readable(tmp_path: Path) -> None:
+    """Below 1,000 items a collection's index exists only in Chroma's in-process cache,
+    and chromadb 1.5.9 fails every read of it ("Nothing found on disk") once that cache
+    evicts it. With Windows' default limits, about one index fits per cache shard, so
+    40 collections always collided; get_chroma_client makes room first."""
+    from quietpost.memory.chroma import get_chroma_client
+
+    client = get_chroma_client(tmp_path / "chroma")
+    collections = [client.get_or_create_collection(f"col{i}") for i in range(40)]
+    for i, collection in enumerate(collections):
+        collection.upsert(ids=["a"], embeddings=[[float(i), 1.0, 0.0]], documents=["x"])
+    for _ in range(2):
+        for collection in collections:
+            assert collection.query(query_embeddings=[[1.0, 1.0, 0.0]], n_results=1)["ids"] == [["a"]]
+
+
 @pytest.mark.asyncio
 async def test_procedural_patterns_below_relevance_are_not_returned(tmp_path: Path) -> None:
     """Only near-duplicate past tasks become planner hints."""
