@@ -10,7 +10,7 @@ import structlog
 
 from quietpost.agent.runnability import refused_user_code_reply
 from quietpost.exceptions import QuietpostToolError
-from quietpost.models.parsing import strip_reasoning
+from quietpost.models.parsing import is_tool_call_text, strip_reasoning
 from quietpost.models.provider import GenerationConfig, Message, ToolCall
 from quietpost.models.router import ModelCapability, ModelRouter
 from quietpost.observability.metrics import increment_agent_steps
@@ -115,6 +115,7 @@ _FINALIZE_PROMPT = (
     "give your best final answer to my original request. If part of it could not "
     "be completed, say so in one sentence."
 )
+_NO_ANSWER = "I could not produce an answer to that. Try rephrasing it or asking in smaller steps."
 
 
 class Executor:
@@ -182,13 +183,17 @@ class Executor:
                 )
                 return state
 
-            answer = content if streamed else strip_reasoning(content)
+            answer, streamed = await self._without_tool_call_text(
+                content if streamed else strip_reasoning(content), streamed, event_queue
+            )
             if not answer.strip():
                 # An empty reply with no tool call: ask once more, without tools,
                 # rather than returning a blank answer.
                 answer, streamed = await self.synthesize(
                     state, router, event_queue, capability
                 )
+                if not answer:
+                    answer, streamed = _NO_ANSWER, False
             state.messages.append(Message(role="assistant", content=answer))
             state.final_answer = answer
             state.status = "complete"
@@ -230,7 +235,22 @@ class Executor:
                     capability, messages, GenerationConfig(temperature=_TEMPERATURE)
                 )
                 content, streamed = strip_reasoning(response.content), False
+            content, streamed = await self._without_tool_call_text(content, streamed, event_queue)
         return content.strip(), streamed
+
+    async def _without_tool_call_text(
+        self,
+        answer: str,
+        streamed: bool,
+        event_queue: asyncio.Queue[dict[str, Any]] | None,
+    ) -> tuple[str, bool]:
+        """Treat a reply that is only a tool call written as text as an empty reply."""
+        if not is_tool_call_text(answer):
+            return answer, streamed
+        logger.warning("tool_call_written_as_text")
+        if streamed:
+            await self._emit(event_queue, {"type": "token_reset"})
+        return "", False
 
     async def _stream_step(
         self,
@@ -467,24 +487,30 @@ _READ_ACTIONS = ("read_file", "list_directory", "file_exists")
 
 
 def _repaired_args(tool_name: str, kwargs: dict[str, Any]) -> dict[str, Any]:
-    """Fix a small model's file name passed as ``content`` on a read.
+    """Fix a small model's filesystem call that left out the path.
 
     Seen (qwen2.5:7b, several runs in a row): {"action": "read_file", "content":
     "release-notes.md"} with no path. It failed validation, and the model told
     the user it could not read the file instead of correcting the call. A read
     has no content, so a single-line value there can only be the path.
+
+    Seen (qwen2.5:7b): {"action": "list_directory"} for "list the files in the
+    workspace". It failed validation, the model repeated the call, then named the
+    files from a guess. A listing of nothing in particular is the workspace itself.
     """
+    if tool_name != "filesystem" or "path" in kwargs:
+        return kwargs
     content = kwargs.get("content")
     if (
-        tool_name == "filesystem"
-        and "path" not in kwargs
-        and kwargs.get("action") in _READ_ACTIONS
+        kwargs.get("action") in _READ_ACTIONS
         and isinstance(content, str)
         and content.strip()
         and "\n" not in content
     ):
         repaired = {key: value for key, value in kwargs.items() if key != "content"}
         return {**repaired, "path": content.strip()}
+    if infer_action(kwargs) == "list_directory":
+        return {**kwargs, "path": "."}
     return kwargs
 
 

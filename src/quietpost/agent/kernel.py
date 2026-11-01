@@ -772,6 +772,7 @@ _WRITE_CODE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _RUN_WORDS = re.compile(r"\b(run|execute)\b", re.IGNORECASE)
+_WRITE_AND_RUN = re.compile(r"\b(and|then)\s+(run|execute)\s+(it|this|that|them)\b", re.IGNORECASE)
 _CODE_REQUEST_START = re.compile(
     r"^\s*(please\s+)?(can you\s+)?(write|generate|create|build|make|develop|implement|code)\b",
     re.IGNORECASE,
@@ -784,9 +785,12 @@ def _honour_explicit_python(plan: list[str], user_input: str) -> list[str]:
 
     Seen: "Explain bubble sort vs merge sort, then use Python to time both" was
     planned as a direct answer, so no tools were offered and nothing was timed.
+    Seen (qwen3:8b): "Write Python code to find the primes below 50 and run it" was
+    planned the same way, and the answer listed output nothing had produced.
     Refusals are left alone.
     """
-    if not _EXPLICIT_PYTHON.search(user_input) or not _is_tool_free_plan(plan):
+    asked = _EXPLICIT_PYTHON.search(user_input) or _WRITE_AND_RUN.search(user_input)
+    if not asked or not _is_tool_free_plan(plan):
         return plan
     if "refuse" in plan[0].lower():
         return plan

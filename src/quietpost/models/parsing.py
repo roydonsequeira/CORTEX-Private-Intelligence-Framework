@@ -11,11 +11,24 @@ from typing import Any
 
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _CODE_FENCE = re.compile(r"```(?:json|JSON)?\s*(.*?)```", re.DOTALL)
+_TOOL_CALL_BLOCK = re.compile(r"<tool_call>.*?(?:</tool_call>|\Z)", re.DOTALL | re.IGNORECASE)
 
 
 def strip_reasoning(text: str) -> str:
     """Remove <think>…</think> blocks emitted by reasoning models."""
     return _THINK_BLOCK.sub("", text).strip()
+
+
+def is_tool_call_text(text: str) -> bool:
+    """True when a reply is nothing but tool calls written out as text.
+
+    The server turns a tool call into structured data only when the request offered
+    tools. Seen (qwen3:8b): asked for a final answer with no tools, after a run that
+    had used them, the model wrote a <tool_call> block anyway and it reached the chat.
+    Text that merely mentions the tag, such as an answer about the format, is left alone.
+    """
+    reply = strip_reasoning(text)
+    return bool(reply) and not _TOOL_CALL_BLOCK.sub("", reply).strip()
 
 
 def extract_json(raw: str) -> Any | None:

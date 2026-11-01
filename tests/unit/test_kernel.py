@@ -464,6 +464,48 @@ async def test_run_time_budget_ends_with_best_effort_answer() -> None:
     assert state.final_answer == "Best effort within the time budget."
 
 
+_TOOL_CALL_TEXT = '<tool_call>\n{"name": "python_exec", "arguments": {"code": "print(1)"}}\n</tool_call>'
+
+
+@pytest.mark.asyncio
+async def test_tool_call_text_at_the_time_limit_is_not_the_answer() -> None:
+    """Asked for a final answer with no tools, a model can still write a tool call as text."""
+    kernel, router, _ = _make_kernel(_settings(max_run_seconds=0.0))
+    router.complete.side_effect = [
+        _mock_model_response('["step"]'),
+        _mock_model_response(_TOOL_CALL_TEXT),
+    ]
+
+    state = await kernel.run("slow task")
+
+    assert state.status == "failed"
+    assert state.final_answer is not None
+    assert state.final_answer.startswith("I could not complete this request")
+
+
+@pytest.mark.asyncio
+async def test_tool_call_text_is_asked_again_then_never_shown() -> None:
+    """A direct answer that is only a tool call gets one more try, like an empty reply."""
+    kernel, router, _ = _make_kernel()
+    router.complete.side_effect = [
+        _mock_model_response('["answer"]'),
+        _mock_model_response(_TOOL_CALL_TEXT),
+        _mock_model_response("Recovered answer."),
+    ]
+    state = await kernel.run("question")
+    assert state.final_answer == "Recovered answer."
+
+    kernel, router, _ = _make_kernel()
+    router.complete.side_effect = [
+        _mock_model_response('["answer"]'),
+        _mock_model_response(_TOOL_CALL_TEXT),
+        _mock_model_response(_TOOL_CALL_TEXT),
+    ]
+    state = await kernel.run("question")
+    assert state.final_answer is not None
+    assert state.final_answer.startswith("I could not produce an answer")
+
+
 @pytest.mark.asyncio
 async def test_code_generation_plan_offers_no_tools() -> None:
     """'Generate code for a calculator' is written out, not routed to the calculator tool."""
@@ -890,6 +932,35 @@ async def test_streamed_preamble_before_tool_call_is_reset() -> None:
 
 
 @pytest.mark.asyncio
+async def test_streamed_tool_call_text_is_retracted() -> None:
+    """Tool-call text already streamed to the chat is taken back before the real answer."""
+    kernel, router, _ = _make_kernel(_settings(stream_tokens=True))
+    router.complete.side_effect = [_mock_model_response('["answer"]')]
+    replies = iter([_TOOL_CALL_TEXT, "Answer."])
+
+    async def fake_stream(*_args: Any, **_kwargs: Any) -> AsyncIterator[StreamChunk]:
+        yield StreamChunk(content=next(replies))
+        yield StreamChunk(done=True)
+
+    router.stream_complete = fake_stream
+
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    state = await kernel.run("task", event_queue=queue)
+
+    events = _drain(queue)
+    types = [e["type"] for e in events]
+    assert types.index("token_reset") < len(types) - 1 - types[::-1].index("token")
+    answer = ""
+    for event in events:
+        if event["type"] == "token_reset":
+            answer = ""
+        elif event["type"] == "token":
+            answer += event["value"]
+    assert answer == "Answer."
+    assert state.final_answer == "Answer."
+
+
+@pytest.mark.asyncio
 async def test_run_with_use_lats_routes_to_lats(monkeypatch: pytest.MonkeyPatch) -> None:
     """use_lats=True routes execution through LATSLoop."""
     kernel, _, _ = _make_kernel()
@@ -949,6 +1020,21 @@ def test_explicit_use_python_adds_a_python_step() -> None:
     assert "python_exec" in spelled[-1]
     refusal = ["Politely refuse: deleting files is not permitted"]
     assert _honour_explicit_python(refusal, "Use Python to delete every file") == refusal
+
+
+def test_write_and_run_adds_a_python_step() -> None:
+    """'Write code ... and run it' is a request for a result, whichever way it was planned."""
+    from quietpost.agent.kernel import _honour_explicit_python
+
+    code = ["Answer directly: write the complete code"]
+    ran = _honour_explicit_python(code, "Write Python code to find the primes below 50 and run it")
+    assert len(ran) == 2 and "python_exec" in ran[1]
+    assert "python_exec" in _honour_explicit_python(code, "Write it, then execute it")[-1]
+    # Code that runs somewhere else is only being described.
+    for request in ("Write a script that runs every hour", "Write code I can run on Linux"):
+        assert _honour_explicit_python(code, request) == code
+    refusal = ["Politely refuse: deleting files is not permitted"]
+    assert _honour_explicit_python(refusal, "Write code to delete my files and run it") == refusal
 
 
 def test_overwrite_needs_user_intent() -> None:
@@ -1070,6 +1156,20 @@ def test_file_name_passed_as_content_on_a_read_becomes_the_path() -> None:
     both = {"action": "read_file", "path": "a.md", "content": "b.md"}
     assert _repaired_args("filesystem", both) == both
     assert _repaired_args("python_exec", {"content": "x"}) == {"content": "x"}
+
+
+def test_listing_with_no_path_lists_the_workspace() -> None:
+    """{"action": "list_directory"} (a small-model slip) still lists, instead of failing."""
+    from quietpost.agent.executor import _repaired_args
+
+    listing = {"action": "list_directory"}
+    assert _repaired_args("filesystem", listing) == {"action": "list_directory", "path": "."}
+    # A read or a write has to name its file, and another tool is not touched.
+    for call in ({"action": "read_file"}, {"action": "file_exists"}, {"content": "x"}):
+        assert _repaired_args("filesystem", call) == call
+    assert _repaired_args("python_exec", listing) == listing
+    named = {"action": "list_directory", "content": "docs"}
+    assert _repaired_args("filesystem", named) == {"action": "list_directory", "path": "docs"}
 
 
 def test_quoted_text_is_not_an_instruction() -> None:

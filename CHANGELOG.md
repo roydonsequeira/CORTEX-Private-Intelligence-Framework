@@ -67,6 +67,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   from, which gives each shard room for six. On Linux and macOS the open-file
   limit is raised to 2,048 when it's lower. A store that already fails works again
   with everything in it, so there's no need to reset memory.
+- **Raw tool calls no longer reach the chat.** When a run hit its time limit,
+  Quietpost asked the model for a final answer with no tools, and qwen3:8b could
+  reply with a `<tool_call>` block, which was shown as the answer. A reply that is
+  nothing but a tool call now counts as no answer.
+- **"List the files" no longer ends in a guess.** qwen2.5:7b could call the listing
+  with no path. The call failed, and the model named the files anyway. A listing
+  with no path now lists the workspace.
+- **"Write code and run it" now runs it.** qwen3:8b could plan this as a written
+  answer, with no tools, and list output that nothing had produced. A request that
+  says "and run it" now always gets a Python step.
 
 ## [1.2.3] - 2026-10-25
 
