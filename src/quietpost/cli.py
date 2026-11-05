@@ -101,7 +101,7 @@ def doctor() -> int:
     """Print a checklist of everything Quietpost needs; return non-zero on failures."""
     import httpx
 
-    from quietpost.config.settings import Settings, _resolve_config_path
+    from quietpost.config.settings import Settings, _resolve_config_path, user_config_file
     from quietpost.exceptions import QuietpostConfigError, QuietpostModelError
 
     failures = 0
@@ -113,7 +113,10 @@ def doctor() -> int:
     if config_path:
         print(f"{_OK} Config: {config_path}")
     else:
-        print(f"{_WARN} No quietpost.yaml found from {Path.cwd()} upward — using defaults")
+        print(
+            f"{_WARN} No quietpost.yaml found from {Path.cwd()} upward or in "
+            f"{user_config_file().parent} — using defaults"
+        )
     try:
         settings = Settings()
     except Exception as exc:

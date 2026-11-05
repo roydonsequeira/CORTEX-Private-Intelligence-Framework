@@ -26,7 +26,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   folder or above it, Quietpost reads the one in your user config folder:
   `%LOCALAPPDATA%\quietpost` on Windows, `~/Library/Application Support/quietpost`
   on macOS and `~/.config/quietpost` on Linux. `QUIETPOST_CONFIG` and a project's
-  own `quietpost.yaml` still come first. This adds the `platformdirs` dependency.
+  own `quietpost.yaml` still come first, and `quietpost doctor` names this folder
+  when it finds no config. This adds the `platformdirs` dependency.
 
 ### Changed
 
