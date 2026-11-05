@@ -85,7 +85,14 @@ def _serve(host: str | None, port: int | None, reload: bool) -> int:
             "run code and read/write workspace files to your network. Set api_key "
             "(or QUIETPOST_API_KEY) and add this host name to allowed_hosts."
         )
-    print(f"Quietpost API -> http://localhost:{bind_port}  (docs: http://localhost:{bind_port}/docs)")
+    from quietpost.api.web import has_bundled_ui
+
+    if has_bundled_ui() and not settings.api_key:
+        print(f"Quietpost -> http://localhost:{bind_port}  (open it in your browser)")
+    else:
+        print(f"Quietpost API -> http://localhost:{bind_port}  (docs: http://localhost:{bind_port}/docs)")
+        if has_bundled_ui():
+            print(f"{_WARN} The UI can't send an API key yet, so it doesn't work while api_key is set.")
     uvicorn.run(
         "quietpost.api.server:create_app",
         factory=True,

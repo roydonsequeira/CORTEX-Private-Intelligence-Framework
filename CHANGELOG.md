@@ -28,6 +28,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on macOS and `~/.config/quietpost` on Linux. `QUIETPOST_CONFIG` and a project's
   own `quietpost.yaml` still come first, and `quietpost doctor` names this folder
   when it finds no config. This adds the `platformdirs` dependency.
+- **The UI ships inside the Python package.** `quietpost serve` serves it on the
+  API's own address, http://localhost:8000, so Quietpost no longer needs Node.js
+  or a second terminal. The page calls only the server it came from, and gets the
+  same Content-Security-Policy and other security headers as the UI's own server.
+  In a source checkout, `npm run build:bundle` in `ui/` builds it into the package;
+  `npm run dev` and the Docker image work as before. While `api_key` is set the UI
+  can't be used, since it can't send the key yet, and `quietpost serve` says so.
 
 ### Changed
 

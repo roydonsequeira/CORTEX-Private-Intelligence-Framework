@@ -96,6 +96,8 @@ quietpost serve                       # API on http://localhost:8000
 cd ui && npm install && npm run dev   # UI on http://localhost:3000 (second terminal)
 ```
 
+Or build the UI into the package once, with `cd ui && npm install && npm run build:bundle`. Then `quietpost serve` serves it as well, at http://localhost:8000, with no second terminal. Run `npm run build:bundle` again after you pull UI changes.
+
 The agent reads and writes files only in `workspace/` (next to `quietpost.yaml`), so put the documents you want it to work with there.
 
 ### Docker Compose (NVIDIA GPU)

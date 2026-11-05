@@ -26,6 +26,9 @@ def _isolate_settings(
         "quietpost.config.settings.user_config_file",
         lambda: tmp_path / "user-config" / "quietpost.yaml",
     )
+    # Never a UI built into this checkout with `npm run build:bundle`: CI has none,
+    # and the app would serve it in place of the API's own 404s.
+    monkeypatch.setattr("quietpost.api.web.WEB_DIR", tmp_path / "no-bundled-ui")
     monkeypatch.setenv("QUIETPOST_CHROMA_PATH", str(tmp_path / "chroma"))
     monkeypatch.setenv("QUIETPOST_DB_PATH", str(tmp_path / "quietpost.db"))
     from quietpost.config import get_settings

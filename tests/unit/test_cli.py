@@ -32,6 +32,33 @@ def test_doctor_names_the_config_it_uses_or_every_place_it_looked(
     assert f"[ ok ] Config: {user_file}" in capsys.readouterr().out
 
 
+def test_serve_says_to_open_the_ui_only_when_the_browser_can_use_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The UI can't send an API key, so with one set only the API is useful."""
+    from quietpost.api import web
+    from quietpost.config import get_settings
+
+    (tmp_path / "web").mkdir()
+    (tmp_path / "web" / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    monkeypatch.setattr(web, "WEB_DIR", tmp_path / "web")
+    monkeypatch.setattr(cli, "_port_free", lambda host, port: True)
+    started: list[int] = []
+    monkeypatch.setattr("uvicorn.run", lambda *args, **kwargs: started.append(kwargs["port"]))
+
+    assert cli.main(["serve", "--port", "8019"]) == 0
+    assert "Quietpost -> http://localhost:8019  (open it in your browser)" in capsys.readouterr().out
+
+    monkeypatch.setenv("QUIETPOST_API_KEY", "a-test-key")
+    get_settings.cache_clear()
+    assert cli.main(["serve", "--port", "8019"]) == 0
+    out = capsys.readouterr().out
+    assert "Quietpost API -> http://localhost:8019" in out
+    assert "open it in your browser" not in out
+    assert "The UI can't send an API key yet" in out
+    assert started == [8019, 8019]
+
+
 def test_serve_refuses_a_public_model_server(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

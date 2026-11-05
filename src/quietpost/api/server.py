@@ -21,6 +21,7 @@ from quietpost.api.middleware.rate_limit import RateLimitMiddleware
 from quietpost.api.middleware.telemetry import telemetry_middleware
 from quietpost.api.routes import chat, health, memory, tasks, tools
 from quietpost.api.task_store import create_task_store
+from quietpost.api.web import mount_ui
 from quietpost.config import get_settings
 from quietpost.config.settings import Settings
 from quietpost.exceptions import QuietpostModelError
@@ -88,6 +89,8 @@ def create_app() -> FastAPI:
     app.include_router(memory.router)
     app.include_router(tools.router)
     app.include_router(health.router)
+    # Last, so every API route above matches first.
+    mount_ui(app)
     FastAPIInstrumentor.instrument_app(app)
     return app
 
