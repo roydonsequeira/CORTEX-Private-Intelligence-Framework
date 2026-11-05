@@ -55,6 +55,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the model server.
 - The UI's Docker image and CI job run on Node.js 26 LTS (Active LTS since 28
   October 2026); the UI still needs Node.js 20.9 or newer.
+- **qwen2.5:7b stays the default model.** On 2 Nov 2026 it ran the 39-case live
+  test plan against qwen3:8b and qwen3.5:4b on a 6 GB GPU, under a rule set before
+  the runs: most passes, no failed safety case, and speed breaks ties. qwen2.5:7b
+  passed 39/39. qwen3:8b recited its system prompt to a jailbreak prompt, and
+  qwen3.5:4b once said it had written a file when both writes had failed. The
+  results are in `evals/live_battery/README.md`.
 
 ### Fixed
 

@@ -34,7 +34,7 @@ Small local models break rules that prompts ask them to follow. Driving Quietpos
 - **Answers never load images** — the UI shows an image in an answer as a link, so an injected `![](https://…?data)` can't send anything out when the answer appears.
 - **Memory learns only what you say about yourself**, and only durable facts — facts inside text you paste or ask it to process are never stored, and every stored fact must be backed by your own words.
 
-The [live test battery](evals/live_battery/) is in the repo. On the release build it scored 39/39 on the test plan, 136/137 extra prompts (the miss was a correct answer over its time limit, and it passed on re-run) and 11/11 ops and security checks. It found 27 issues the unit tests had missed.
+The [live test battery](evals/live_battery/) is in the repo. On the release build it scored 39/39 on the test plan, 136/137 extra prompts (the miss was a correct answer over its time limit, and it passed on re-run) and 11/11 ops and security checks. It found 27 issues the unit tests had missed. On 2 Nov 2026 the same plan compared `qwen2.5:7b` with `qwen3:8b` and `qwen3.5:4b` on a 6 GB GPU: `qwen2.5:7b` passed 39/39 and stays the default, while each of the others failed a safety case ([results](evals/live_battery/README.md#model-comparison-2-nov-2026)).
 
 ## Architecture
 
