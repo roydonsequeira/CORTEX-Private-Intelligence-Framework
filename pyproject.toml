@@ -70,6 +70,10 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# The bundled UI (`npm run build:bundle` in ui/), served by the API itself.
+[tool.setuptools.package-data]
+quietpost = ["web/**/*"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

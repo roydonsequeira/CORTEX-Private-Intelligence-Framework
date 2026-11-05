@@ -24,7 +24,10 @@ tests against a real model are opt-in: `pytest -m ollama`.
 ## Code Style
 
 - Python code must pass `ruff` and `mypy` with no exceptions.
-- TypeScript code must pass `npm run lint`, `npm run typecheck`, and `npm run build`.
+- TypeScript code must pass `npm run lint`, `npm run typecheck`, `npm run build`, and
+  `npm run build:bundle`. The last one builds the static UI that ships inside the
+  Python package (into `src/quietpost/web/`), so it fails on anything that needs
+  a Node.js server at run time.
 - Keep modules focused. Prefer existing local abstractions over new framework layers.
 - Avoid cloud dependencies and API-key assumptions unless the feature is explicitly optional.
 
@@ -42,7 +45,7 @@ Run before opening a PR:
 python -m pytest tests/ -v
 python -m ruff check src tests
 python -m mypy src tests
-cd ui && npm run lint && npm run typecheck && npm run build
+cd ui && npm run lint && npm run typecheck && npm run build && npm run build:bundle
 ```
 
 ## Tool Plugins

@@ -16,6 +16,8 @@ tests
 docs
 infra
 **/__pycache__
+# The UI has its own image; a bundled copy built locally stays out of the API's.
+src/quietpost/web
 **/*.pyc
 .pytest_cache
 .mypy_cache

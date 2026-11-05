@@ -100,7 +100,8 @@ function describeFailure(exc: Error, received: boolean): string {
   }
   return received
     ? "The connection to Quietpost was lost before the answer finished. Try again."
-    : `Can't reach the Quietpost API at ${API_URL}. Is "quietpost serve" running?`;
+    : // The bundled UI has no API address of its own: it calls the server it came from.
+      `Can't reach the Quietpost API at ${API_URL || window.location.origin}. Is "quietpost serve" running?`;
 }
 
 function httpErrorMessage(status: number): string {

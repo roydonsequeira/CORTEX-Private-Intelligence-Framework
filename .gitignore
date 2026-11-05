@@ -46,6 +46,8 @@ ui/tsconfig.tsbuildinfo
 ui/next-env.d.ts
 ui/out/
 ui/.env.local
+# The bundled UI, built into the package by `npm run build:bundle`.
+src/quietpost/web/
 
 # OS
 .DS_Store

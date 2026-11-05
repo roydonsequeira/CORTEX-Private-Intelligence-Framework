@@ -61,6 +61,9 @@ jobs:
         run: npm run typecheck
       - working-directory: ui
         run: npm run build
+      # The static UI that ships inside the Python package.
+      - working-directory: ui
+        run: npm run build:bundle
 
   docker-build:
     runs-on: ubuntu-latest
