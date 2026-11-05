@@ -22,6 +22,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   matches a schema.
 - `ollama_think` (off by default) turns a thinking model's reasoning on. With it
   off, qwen3 and qwen3.5 answer in 1-2 seconds instead of 17-35 on a 6 GB GPU.
+- **Settings from any folder.** When there's no `quietpost.yaml` in the current
+  folder or above it, Quietpost reads the one in your user config folder:
+  `%LOCALAPPDATA%\quietpost` on Windows, `~/Library/Application Support/quietpost`
+  on macOS and `~/.config/quietpost` on Linux. `QUIETPOST_CONFIG` and a project's
+  own `quietpost.yaml` still come first. This adds the `platformdirs` dependency.
 
 ### Changed
 

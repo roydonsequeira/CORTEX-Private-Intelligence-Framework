@@ -41,6 +41,7 @@ dependencies = [
     "html2text>=2025.4.15",
     "jsonschema>=4.26.0,<5.0",
     "truststore>=0.10.5",
+    "platformdirs>=4.12,<5.0",
 ]
 
 [project.urls]

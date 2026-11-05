@@ -133,7 +133,7 @@ Telemetry export is off in the default `quietpost.yaml` (no collector is running
 
 ## Configuration
 
-All runtime configuration lives in `quietpost.yaml` and can be overridden with `QUIETPOST_` environment variables. Quietpost finds `quietpost.yaml` by walking up from the current working directory, so it works from any subdirectory; set `QUIETPOST_CONFIG` to point at an explicit config file.
+All runtime configuration lives in `quietpost.yaml` and can be overridden with `QUIETPOST_` environment variables. Quietpost finds `quietpost.yaml` by walking up from the current working directory, so it works from any subdirectory; set `QUIETPOST_CONFIG` to point at an explicit config file. If there's none on the way up, it uses the one in your user config folder (`%LOCALAPPDATA%\quietpost` on Windows, `~/Library/Application Support/quietpost` on macOS, `~/.config/quietpost` on Linux), so an installed Quietpost works from any folder.
 
 | Key | Default | Description |
 |---|---|---|

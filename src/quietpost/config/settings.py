@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
+from platformdirs import user_config_path
 from pydantic import BaseModel, field_validator, model_validator
 from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, EnvSettingsSource, PydanticBaseSettingsSource
@@ -32,10 +33,20 @@ _DEFAULT_MODEL_URLS = {
 }
 
 
+def user_config_file() -> Path:
+    """The config `quietpost init` writes, in the user's own config folder.
+
+    It is AppData/Local/quietpost on Windows, ~/Library/Application Support/quietpost
+    on macOS and ~/.config/quietpost on Linux.
+    """
+    return user_config_path("quietpost", appauthor=False) / _CONFIG_FILENAME
+
+
 def _resolve_config_path() -> Path | None:
     """Locate quietpost.yaml: an explicit QUIETPOST_CONFIG, else the nearest one at or
-    above the current working directory, so Quietpost works from any subdirectory.
-    A cortex.yaml (or CORTEX_CONFIG) from before the rename is used the same way.
+    above the current working directory, so Quietpost works from any subdirectory,
+    else the one in the user's config folder (see user_config_file). A cortex.yaml
+    (or CORTEX_CONFIG) from before the rename is used the same way.
     """
     override = os.environ.get(_CONFIG_ENV_VAR) or os.environ.get(_LEGACY_CONFIG_ENV_VAR)
     if override:
@@ -47,7 +58,8 @@ def _resolve_config_path() -> Path | None:
             candidate = directory / name
             if candidate.is_file():
                 return candidate
-    return None
+    user_file = user_config_file()
+    return user_file if user_file.is_file() else None
 
 
 def _existing_data_path(path: Path) -> Path:

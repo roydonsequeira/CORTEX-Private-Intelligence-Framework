@@ -21,6 +21,11 @@ def _isolate_settings(
         if name.upper().startswith(("QUIETPOST_", "CORTEX_")):
             monkeypatch.delenv(name)
     monkeypatch.chdir(tmp_path)
+    # Never the developer's own config from `quietpost init`.
+    monkeypatch.setattr(
+        "quietpost.config.settings.user_config_file",
+        lambda: tmp_path / "user-config" / "quietpost.yaml",
+    )
     monkeypatch.setenv("QUIETPOST_CHROMA_PATH", str(tmp_path / "chroma"))
     monkeypatch.setenv("QUIETPOST_DB_PATH", str(tmp_path / "quietpost.db"))
     from quietpost.config import get_settings

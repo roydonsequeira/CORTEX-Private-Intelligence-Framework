@@ -270,3 +270,29 @@ def test_a_fresh_install_uses_the_new_data_folder(
     settings = get_settings()
     assert settings.chroma_path == Path(".quietpost/chroma")
     assert settings.db_path == Path(".quietpost/quietpost.db")
+
+
+def test_the_user_config_from_quietpost_init_is_used_outside_a_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An installed Quietpost finds its settings from any folder."""
+    from quietpost.config import settings as settings_module
+
+    user_file = settings_module.user_config_file()  # conftest points it into tmp_path
+    user_file.parent.mkdir(parents=True)
+    user_file.write_text(yaml.dump({"api_port": 9500}))
+    elsewhere = tmp_path / "somewhere" / "else"
+    elsewhere.mkdir(parents=True)
+    monkeypatch.chdir(elsewhere)
+    get_settings.cache_clear()
+    assert get_settings().api_port == 9500
+
+    # A project's own quietpost.yaml still wins, and QUIETPOST_CONFIG wins over both.
+    (tmp_path / "somewhere" / "quietpost.yaml").write_text(yaml.dump({"api_port": 9600}))
+    get_settings.cache_clear()
+    assert get_settings().api_port == 9600
+    explicit = tmp_path / "explicit.yaml"
+    explicit.write_text(yaml.dump({"api_port": 9700}))
+    monkeypatch.setenv("QUIETPOST_CONFIG", str(explicit))
+    get_settings.cache_clear()
+    assert get_settings().api_port == 9700
