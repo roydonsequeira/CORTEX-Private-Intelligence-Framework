@@ -10,6 +10,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - The UI's Docker image and CI job run on Node.js 26 LTS (Active LTS since 28
   October 2026); the UI still needs Node.js 20.9 or newer.
+- The README is rewritten around what the guards do and what was measured. It
+  now dates the live battery results (v1.2.1), lists the known gaps, including
+  the `web_fetch` DNS-rebinding window (#41), and replaces the old roadmap with
+  the open issues.
+
+### Fixed
+
+- **The README's install command for the container sandbox pointed at someone
+  else's package.** `pip install 'cortex-agent[container]'` installs an
+  unrelated project that uses that name on PyPI. The command is now
+  `pip install -e '.[container]'`, run from the clone.
+- The README said the outside security review raised four issues. It filed
+  five (#54–#58), and all five are fixed.
 
 ## [1.2.3] - 2026-10-25
 
