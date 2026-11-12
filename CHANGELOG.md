@@ -35,6 +35,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   In a source checkout, `npm run build:bundle` in `ui/` builds it into the package;
   `npm run dev` and the Docker image work as before. While `api_key` is set the UI
   can't be used, since it can't send the key yet, and `quietpost serve` says so.
+- **`quietpost init` sets Quietpost up in one go.** It checks the model server,
+  suggests a chat model for your GPU, offers to download what Ollama is missing
+  (with the size, such as 4.7 GB for qwen2.5:7b), and writes `quietpost.yaml` to
+  your user config folder, or to the file `QUIETPOST_CONFIG` names. Memory goes in
+  your user data folder, and the workspace in `Quietpost` in your home folder
+  rather than in Documents, which OneDrive and iCloud often sync. `--data-dir` and
+  `--workspace` choose other folders. It downloads only after you answer yes (or
+  pass `--yes`); with no terminal to answer, it says what to pull instead. For a
+  server started with an API key, it reads the key from
+  `QUIETPOST_MODEL_SERVER_API_KEY` and never writes it to the file. It warns when
+  a `quietpost.yaml` in the current folder or above it would be read instead.
 
 ### Changed
 

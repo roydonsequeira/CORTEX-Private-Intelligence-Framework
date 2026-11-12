@@ -21,11 +21,15 @@ def _isolate_settings(
         if name.upper().startswith(("QUIETPOST_", "CORTEX_")):
             monkeypatch.delenv(name)
     monkeypatch.chdir(tmp_path)
-    # Never the developer's own config from `quietpost init`.
+    # Never the developer's own config, data or workspace from `quietpost init`.
     monkeypatch.setattr(
         "quietpost.config.settings.user_config_file",
         lambda: tmp_path / "user-config" / "quietpost.yaml",
     )
+    monkeypatch.setattr(
+        "quietpost.init_wizard.user_data_path", lambda *args, **kwargs: tmp_path / "user-data"
+    )
+    monkeypatch.setattr("quietpost.init_wizard.home_folder", lambda: tmp_path / "home")
     # Never a UI built into this checkout with `npm run build:bundle`: CI has none,
     # and the app would serve it in place of the API's own 404s.
     monkeypatch.setattr("quietpost.api.web.WEB_DIR", tmp_path / "no-bundled-ui")

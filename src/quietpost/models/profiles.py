@@ -8,6 +8,11 @@ from dataclasses import dataclass
 
 EMBED_MODEL = "nomic-embed-text"
 
+# What downloading the suggested models costs, in GB (10^9 bytes), shown before
+# `quietpost init` asks. Ollama listed them at 4,683,087,332 and 274,302,450 bytes
+# on 12 Nov 2026.
+DOWNLOAD_SIZES_GB: dict[str, float] = {"qwen2.5:7b": 4.7, EMBED_MODEL: 0.3}
+
 
 @dataclass(frozen=True)
 class ModelProfile:

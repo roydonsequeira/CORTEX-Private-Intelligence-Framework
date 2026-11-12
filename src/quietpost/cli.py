@@ -1,5 +1,6 @@
 """`quietpost` command line: start the API and diagnose a local setup.
 
+    quietpost init           set up models, settings and folders (asks before downloading)
     quietpost serve          start the API (uvicorn) with the settings from quietpost.yaml
     quietpost doctor         check Python, config, the model server, models, ports, and HTTPS
     quietpost reset-memory   wipe stored memory (asks for --yes)
@@ -39,6 +40,34 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument("--port", type=int, default=None, help="port (default: from config)")
     serve.add_argument("--reload", action="store_true", help="auto-reload on code changes")
 
+    init = sub.add_parser(
+        "init", help="set Quietpost up: models, settings and folders, in one go"
+    )
+    init.add_argument(
+        "--model-server",
+        choices=["ollama", "openai-compatible"],
+        default="ollama",
+        help="where the models run (default: ollama)",
+    )
+    init.add_argument("--url", default=None, help="the model server's address, if not the usual one")
+    init.add_argument("--chat-model", default=None, help="the chat model (default: chosen for your GPU)")
+    init.add_argument("--embed-model", default=None, help="the embedding model")
+    init.add_argument(
+        "--data-dir",
+        type=Path,
+        default=None,
+        help="where memory and other data go (default: your user data folder)",
+    )
+    init.add_argument(
+        "--workspace",
+        type=Path,
+        default=None,
+        help="the only folder Quietpost's tools can read and write (default: Quietpost "
+        "in your home folder)",
+    )
+    init.add_argument("--yes", action="store_true", help="accept every suggestion without asking")
+    init.add_argument("--force", action="store_true", help="replace an existing config")
+
     sub.add_parser("doctor", help="diagnose the local setup")
 
     reset = sub.add_parser(
@@ -49,6 +78,21 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "serve":
         return _serve(args.host, args.port, args.reload)
+    if args.command == "init":
+        from quietpost import init_wizard
+
+        return init_wizard.run(
+            init_wizard.InitOptions(
+                model_server=args.model_server,
+                url=args.url,
+                chat_model=args.chat_model,
+                embed_model=args.embed_model,
+                yes=args.yes,
+                force=args.force,
+                data_dir=args.data_dir,
+                workspace=args.workspace,
+            )
+        )
     if args.command == "doctor":
         return doctor()
     if args.command == "reset-memory":
