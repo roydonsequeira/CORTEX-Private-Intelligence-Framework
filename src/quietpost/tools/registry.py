@@ -1,8 +1,11 @@
-"""Tool registry — auto-discovery, schema validation, and instrumented execution."""
+"""Tool registry — plugin loading, schema validation, and instrumented execution."""
 
+import importlib
 import importlib.util
+import pkgutil
 import time
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import jsonschema
@@ -15,6 +18,10 @@ from quietpost.tools.base import BaseTool, ToolResult, ToolSchema
 
 logger = structlog.get_logger(__name__)
 _tracer = get_tracer(__name__)
+
+# The plugins that ship with Quietpost, inside the package itself.
+_SHIPPED_PLUGINS_PACKAGE = "quietpost.tools.plugins"
+_SHIPPED_PLUGINS_DIR = Path(__file__).resolve().parent / "plugins"
 
 
 class ToolRegistry:
@@ -31,11 +38,31 @@ class ToolRegistry:
         self._tools[tool.schema.name] = tool
         logger.debug("tool_registered", name=tool.schema.name)
 
+    def load_plugins(self, plugins_dir: Path | None = None) -> None:
+        """Register the plugins that ship with Quietpost, then those in plugins_dir.
+
+        The shipped ones are imported from the package, so they load in an
+        installed copy too, wherever Quietpost is started from. Run this after the
+        built-in tools are registered: a plugin never replaces a registered tool.
+        """
+        for module_info in pkgutil.iter_modules([str(_SHIPPED_PLUGINS_DIR)]):
+            if module_info.name.startswith("_"):
+                continue
+            name = f"{_SHIPPED_PLUGINS_PACKAGE}.{module_info.name}"
+            try:
+                module = importlib.import_module(name)
+            except Exception as exc:
+                logger.warning("plugin_load_failed", path=name, error=str(exc))
+                continue
+            self._register_plugin_tools(module, name)
+        if plugins_dir is not None and not _is_shipped_plugins_dir(plugins_dir):
+            self.auto_discover(plugins_dir)
+
     def auto_discover(self, plugins_dir: Path) -> None:
-        """Scan plugins_dir for .py files and register any BaseTool subclasses found."""
-        if not plugins_dir.exists():
+        """Register the tools defined in plugins_dir's .py files (see load_plugins)."""
+        if not plugins_dir.is_dir():
             return
-        for path in plugins_dir.glob("*.py"):
+        for path in sorted(plugins_dir.glob("*.py")):
             if path.name.startswith("_"):
                 continue
             try:
@@ -44,16 +71,34 @@ class ToolRegistry:
                     continue
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
-                for attr_name in dir(module):
-                    attr = getattr(module, attr_name)
-                    if (
-                        isinstance(attr, type)
-                        and issubclass(attr, BaseTool)
-                        and attr is not BaseTool
-                    ):
-                        self.register(attr())
             except Exception as exc:
                 logger.warning("plugin_load_failed", path=str(path), error=str(exc))
+                continue
+            self._register_plugin_tools(module, str(path))
+
+    def _register_plugin_tools(self, module: ModuleType, source: str) -> None:
+        """Register each tool class the plugin module defines.
+
+        A class it only imports is skipped: a plugin that imported FileSystemTool
+        used to register a second copy, rooted at the current folder, in place of
+        the one confined to the workspace. For the same reason a tool name that is
+        already taken keeps its tool, and the plugin's tool is skipped.
+        """
+        for attr in vars(module).values():
+            if not (
+                isinstance(attr, type)
+                and issubclass(attr, BaseTool)
+                and attr.__module__ == module.__name__
+            ):
+                continue
+            try:
+                name = attr.schema.name
+                if name in self._tools:
+                    logger.warning("plugin_tool_name_taken", name=name, plugin=source)
+                    continue
+                self.register(attr())
+            except Exception as exc:
+                logger.warning("plugin_load_failed", path=source, error=str(exc))
 
     def get(self, name: str) -> BaseTool | None:
         """Return the tool registered under name, or None if not found."""
@@ -120,3 +165,11 @@ class ToolRegistry:
         except jsonschema.ValidationError as exc:
             return f"Invalid arguments for tool '{tool.schema.name}': {exc.message}"
         return None
+
+
+def _is_shipped_plugins_dir(path: Path) -> bool:
+    """True when path is the package's own plugins folder, already loaded."""
+    try:
+        return path.samefile(_SHIPPED_PLUGINS_DIR)
+    except OSError:
+        return False

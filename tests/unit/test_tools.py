@@ -186,6 +186,101 @@ def test_tool_registry_auto_discover_skips_bad_plugins(tmp_path: Path) -> None:
     assert registry.list_tools() == []
 
 
+def _plugin_source(name: str) -> str:
+    """A plugin file defining one tool called ``name`` that answers "plugin"."""
+    return textwrap.dedent(
+        f"""
+        from typing import ClassVar
+        from quietpost.tools.base import BaseTool, ToolResult, ToolSchema
+
+        class Plugin(BaseTool):
+            schema: ClassVar[ToolSchema] = ToolSchema(
+                name={name!r},
+                description="Test plugin.",
+                parameters={{"type": "object", "properties": {{}}, "additionalProperties": False}},
+            )
+
+            async def execute(self, **kwargs: object) -> ToolResult:
+                return ToolResult(tool_name={name!r}, success=True, output="plugin", execution_time_ms=0.0)
+        """
+    )
+
+
+def test_shipped_plugins_load_anywhere_with_an_empty_plugins_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An installed copy has no src/ folder: the calculator comes from the package.
+
+    `quietpost init` points plugins_dir at an empty folder, and the server can be
+    started from any folder; the calculator was missing in both cases.
+    """
+    from quietpost.tools.plugins.calculator import CalculatorTool
+
+    empty = tmp_path / "plugins"
+    empty.mkdir()
+    monkeypatch.chdir(empty)
+    for plugins_dir in (empty, None):
+        registry = ToolRegistry()
+        registry.load_plugins(plugins_dir)
+        assert isinstance(registry.get("calculator"), CalculatorTool)
+
+
+def test_plugins_dir_loads_after_and_never_replaces_a_tool(tmp_path: Path) -> None:
+    """A plugin can't swap out the workspace-confined filesystem tool or a shipped plugin."""
+    from quietpost.tools.plugins.calculator import CalculatorTool
+
+    plugins = tmp_path / "plugins"
+    plugins.mkdir()
+    for name in ("filesystem", "calculator", "echo_plugin"):
+        (plugins / f"my_{name}.py").write_text(_plugin_source(name))
+    builtin = FileSystemTool(allowed_root=tmp_path / "workspace")
+    registry = ToolRegistry()
+    registry.register(builtin)
+    registry.load_plugins(plugins)
+    assert registry.get("filesystem") is builtin
+    assert isinstance(registry.get("calculator"), CalculatorTool)
+    assert registry.get("echo_plugin") is not None
+    assert sorted(schema.name for schema in registry.list_tools()) == [
+        "calculator",
+        "echo_plugin",
+        "filesystem",
+    ]
+
+
+def test_plugins_dir_naming_the_shipped_folder_loads_it_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A config from a source checkout may still point plugins_dir at the shipped folder."""
+    from quietpost.tools import registry as registry_module
+
+    scanned: list[Path] = []
+    monkeypatch.setattr(ToolRegistry, "auto_discover", lambda _self, path: scanned.append(path))
+    registry = ToolRegistry()
+    registry.load_plugins(registry_module._SHIPPED_PLUGINS_DIR / ".." / "plugins")
+    assert scanned == []
+    assert registry.get("calculator") is not None
+
+
+def test_a_plugin_registers_only_the_tools_it_defines(tmp_path: Path) -> None:
+    """Importing FileSystemTool used to register a copy rooted at the current folder."""
+    (tmp_path / "helper.py").write_text(
+        "from quietpost.tools.builtin.filesystem import FileSystemTool\n"
+        + _plugin_source("echo_plugin")
+    )
+    registry = ToolRegistry()
+    registry.auto_discover(tmp_path)
+    assert [schema.name for schema in registry.list_tools()] == ["echo_plugin"]
+
+
+def test_a_broken_tool_class_does_not_drop_the_rest_of_its_plugin(tmp_path: Path) -> None:
+    """A class with no schema is skipped with a warning; the module's other tools load."""
+    broken_first = "from quietpost.tools.base import BaseTool\n\nclass Broken(BaseTool):\n    pass\n"
+    (tmp_path / "mixed.py").write_text(broken_first + _plugin_source("echo_plugin"))
+    registry = ToolRegistry()
+    registry.auto_discover(tmp_path)
+    assert [schema.name for schema in registry.list_tools()] == ["echo_plugin"]
+
+
 @pytest.mark.asyncio
 async def test_filesystem_reads_utf8_regardless_of_locale(tmp_path: Path) -> None:
     """Non-ASCII UTF-8 files read correctly (Windows' default codec is cp1252)."""
@@ -283,6 +378,14 @@ def test_filesystem_from_settings_protects_the_package_and_plugins(tmp_path: Pat
     protected = {str(path) for path in tool._protected_dirs}
     assert str((tmp_path / "plugins").resolve()) in protected
     assert any(path.name == "quietpost" and (path / "cli.py").exists() for path in tool._protected_dirs)
+
+
+def test_filesystem_from_settings_without_a_plugins_dir(tmp_path: Path) -> None:
+    """With no plugins folder set, the package (shipped plugins included) stays protected."""
+    from quietpost.config.settings import Settings
+
+    tool = FileSystemTool.from_settings(Settings(allowed_root=tmp_path))
+    assert [path.name for path in tool._protected_dirs] == ["quietpost"]
 
 
 @pytest.mark.asyncio

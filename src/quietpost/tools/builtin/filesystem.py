@@ -85,11 +85,13 @@ class FileSystemTool(BaseTool):
         the workspace root is widened to contain them: a .py file written there
         would run, unsandboxed, the next time Quietpost starts.
         """
-        package_dir = Path(__file__).resolve().parents[2]
+        protected: list[str | Path] = [Path(__file__).resolve().parents[2]]
+        if settings.plugins_dir is not None:
+            protected.append(settings.plugins_dir)
         return cls(
             settings.allowed_root,
             settings.allowed_write_extensions,
-            protected_dirs=[settings.plugins_dir, package_dir],
+            protected_dirs=protected,
         )
 
     async def execute(self, **kwargs: object) -> ToolResult:

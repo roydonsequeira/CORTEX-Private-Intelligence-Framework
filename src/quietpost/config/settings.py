@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 import yaml
 from platformdirs import user_config_path
@@ -101,7 +101,8 @@ class _YamlSource(PydanticBaseSettingsSource):
         """
         for name, field in self.settings_cls.model_fields.items():
             value = data.get(name)
-            if field.annotation is Path and isinstance(value, str) and value.strip():
+            is_path = Path in (field.annotation, *get_args(field.annotation))
+            if is_path and isinstance(value, str) and value.strip():
                 data[name] = str(base / Path(value.strip()).expanduser())
         return data
 
@@ -228,7 +229,10 @@ class Settings(BaseSettings):
     memory_consolidation: bool = True
     # Semantic memories below this relevance (1 / (1 + distance)) are not injected.
     semantic_min_relevance: float = 0.0
-    plugins_dir: Path = Path("./src/quietpost/tools/plugins")
+    # A folder of your own tool plugins, loaded after the built-in tools and the
+    # plugins that ship with Quietpost, which always load. Unset: none. Plugin code
+    # runs unsandboxed, so the agent's tools can never write in this folder.
+    plugins_dir: Path | None = None
     # The only folder the agent's tools can read and write. A dedicated folder,
     # not the project root: the agent must not be able to read quietpost.yaml or
     # edit Quietpost's own code (a planted plugin would run unsandboxed on restart).
@@ -256,6 +260,12 @@ class Settings(BaseSettings):
         if upper not in valid:
             raise ValueError(f"log_level must be one of {valid}, got: {v!r}")
         return upper
+
+    @field_validator("plugins_dir", mode="before")
+    @classmethod
+    def _blank_plugins_dir_is_unset(cls, v: object) -> object:
+        """An empty plugins_dir means no folder: Path("") is the current folder."""
+        return None if isinstance(v, str) and not v.strip() else v
 
     @model_validator(mode="after")
     def _keep_pre_rename_data(self) -> "Settings":

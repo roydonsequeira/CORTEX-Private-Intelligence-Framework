@@ -50,7 +50,9 @@ cd ui && npm run lint && npm run typecheck && npm run build && npm run build:bun
 
 ## Tool Plugins
 
-Tool plugins live under `src/quietpost/tools/plugins/`. A plugin should:
+Plugins that ship with Quietpost live under `src/quietpost/tools/plugins/` and load
+on every start. A user's own plugins go in the folder set by `plugins_dir`. A plugin
+should:
 
 - Inherit from `BaseTool`.
 - Define a `ToolSchema` with a JSON Schema `parameters` object.

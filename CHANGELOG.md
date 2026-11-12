@@ -74,8 +74,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   passed 39/39. qwen3:8b recited its system prompt to a jailbreak prompt, and
   qwen3.5:4b once said it had written a file when both writes had failed. The
   results are in `evals/live_battery/README.md`.
+- **`plugins_dir` is now for your own plugins, and is unset by default.** The
+  plugins that ship with Quietpost, such as the calculator, always load from the
+  package, and the folder `plugins_dir` names loads after them. A plugin no longer
+  replaces a tool that is already registered; it is skipped with a
+  `plugin_tool_name_taken` warning. An empty `plugins_dir` means no folder. It
+  used to mean the current folder, so every `.py` file there ran on start.
 
 ### Fixed
+
+- **The calculator loads in every install.** Plugins were read only from
+  `plugins_dir`, which defaulted to `./src/quietpost/tools/plugins` under the
+  folder Quietpost was started in. The calculator loaded only when a
+  `quietpost.yaml` named the source folder, as the repo's own one did, or when
+  Quietpost was started in a checkout's root folder. The prompts mention the
+  calculator either way, so without it arithmetic went to `python_exec`.
+- **A plugin registers only the tools it defines.** Every tool class in a plugin's
+  namespace was registered, imported ones included, and a later tool replaced an
+  earlier one with the same name. A plugin that imported `FileSystemTool`
+  therefore replaced the workspace-confined filesystem tool with a copy rooted at
+  the folder Quietpost was started in, which didn't protect Quietpost's own code.
+  One broken tool class also no longer stops the rest of its plugin from loading.
 
 - **Memory no longer breaks on Windows.** In about one memory store in 64, one of
   the two memory collections, facts or tool patterns, failed every read with

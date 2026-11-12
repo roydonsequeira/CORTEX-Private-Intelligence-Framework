@@ -69,7 +69,7 @@ flowchart TB
 - **LATS-augmented ReAct:** Language Agent Tree Search for hard tasks where a linear loop stalls.
 - **Supervisor-worker orchestration:** decomposes complex jobs into parallel sub-agent runs and aggregates results.
 - **Sandboxed tool execution:** RestrictedPython code execution, filesystem guardrails, web fetching, document indexing.
-- **Plugin-first tools:** drop a `BaseTool` subclass into `src/quietpost/tools/plugins/` and restart.
+- **Plugin-first tools:** drop a `BaseTool` subclass into your `plugins_dir` folder and restart.
 - **Streaming API:** Server-Sent Events for plans, steps, tool calls, tokens, and completion events.
 - **Operator UI:** terminal-inspired Next.js interface with memory search and execution trace panel.
 - **OpenTelemetry tracing (opt-in):** FastAPI, model calls, tools, memory, and agent spans exported to Jaeger — on in the Docker stack, off in the shipped `quietpost.yaml` for native runs.
@@ -228,7 +228,7 @@ class EchoTool(BaseTool):
         )
 ```
 
-Drop the file in `src/quietpost/tools/plugins/` and restart Quietpost.
+Put the file in a folder of your own, set `plugins_dir` to that folder in `quietpost.yaml`, and restart Quietpost. It loads after the built-in tools and the plugins that ship with Quietpost (`src/quietpost/tools/plugins/`, which always load). A plugin never replaces a tool that is already registered, so give yours a new name. Plugin code runs unsandboxed: add only code you trust.
 
 ## Security Model
 

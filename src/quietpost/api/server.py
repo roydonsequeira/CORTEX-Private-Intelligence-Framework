@@ -143,7 +143,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     router = ModelRouter(provider, settings)
     tool_registry = ToolRegistry(settings)
     register_builtin_tools(tool_registry, settings, semantic)
-    tool_registry.auto_discover(settings.plugins_dir)
+    tool_registry.load_plugins(settings.plugins_dir)
     kernel = AgentKernel(router, tool_registry, memory_manager, settings)
     supervisor = SupervisorAgent(
         lambda: AgentKernel(router, tool_registry, memory_manager, settings),

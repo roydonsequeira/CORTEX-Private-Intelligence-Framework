@@ -36,7 +36,9 @@ otel_endpoint: http://localhost:4317
 
 # --- Agent and tools ----------------------------------------------------------
 max_agent_steps: 10
-plugins_dir: ./src/quietpost/tools/plugins
+# The plugins that ship with Quietpost always load. To add your own, put them in
+# a folder and name it here. Plugin code runs unsandboxed: add only code you trust.
+# plugins_dir: ./plugins
 # The only folder the agent can read and write (created on start). Keep it
 # separate from this project: the agent must not reach quietpost.yaml or Quietpost's
 # own code. Hidden files (.env, .git, ...) are off-limits wherever it points.

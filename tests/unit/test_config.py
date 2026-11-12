@@ -85,6 +85,21 @@ def test_relative_yaml_paths_are_relative_to_the_config_file(
     assert s.task_db_path == tmp_path / "abs" / "tasks.db"  # absolute paths are kept
 
 
+def test_plugins_dir_is_unset_by_default_and_when_blank(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No plugins folder unless one is named: Path("") would load every .py file in
+    the current folder."""
+    assert Settings().plugins_dir is None
+    monkeypatch.setenv("QUIETPOST_PLUGINS_DIR", "")
+    assert Settings().plugins_dir is None
+    monkeypatch.setenv("QUIETPOST_PLUGINS_DIR", "  ")
+    assert Settings().plugins_dir is None
+    (tmp_path / "quietpost.yaml").write_text("plugins_dir: ''\n")
+    monkeypatch.delenv("QUIETPOST_PLUGINS_DIR")
+    assert Settings().plugins_dir is None
+
+
 def test_yaml_paths_expand_the_home_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
