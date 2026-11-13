@@ -3,7 +3,8 @@
 It checks the model server, suggests models for the GPU, downloads the ones
 Ollama is missing once the user agrees, and writes the quietpost.yaml that
 Quietpost will read, with data and workspace folders that don't depend on where
-a command is run from.
+a command is run from. A model that would run on another computer, such as one
+of Ollama's cloud models, is refused before anything is downloaded.
 """
 
 import asyncio
@@ -23,7 +24,12 @@ from platformdirs import user_data_path
 
 from quietpost.config import settings as config_settings
 from quietpost.exceptions import QuietpostConfigError, QuietpostModelError
-from quietpost.models.endpoints import ensure_local_model_server
+from quietpost.models.endpoints import (
+    OLLAMA_CLOUD,
+    ensure_local_model_server,
+    is_cloud_model_name,
+    runs_elsewhere,
+)
 from quietpost.models.openai_compat import OpenAICompatibleProvider
 from quietpost.models.profiles import (
     DOWNLOAD_SIZES_GB,
@@ -31,7 +37,12 @@ from quietpost.models.profiles import (
     detect_gpu_memory_gb,
     profile_for,
 )
-from quietpost.models.provider import ModelProvider, OllamaProvider, prefer_ipv4_loopback
+from quietpost.models.provider import (
+    ModelProvider,
+    OllamaProvider,
+    error_reply,
+    prefer_ipv4_loopback,
+)
 
 Ask = Callable[[str], str]
 Say = Callable[[str], None]
@@ -186,13 +197,23 @@ def _choose_models(
 
     if options.model_server != "ollama":
         chosen = _server_models(options, available, ask, say)
-        return 1 if chosen is None else _Setup(*chosen, missing=[])
+        if chosen is None or not _all_run_here(_by_option(*chosen), say):
+            return 1
+        return _Setup(*chosen, missing=[])
 
     chat_model, embed_model = _ollama_models(options, available, say, gpu_memory)
+    by_option = _by_option(chat_model, embed_model)
+    present = [m for m in by_option.values() if _has_model(available, m)]
+    if not _all_run_here(by_option, say, url, present):
+        return 1
     missing = [m for m in dict.fromkeys((chat_model, embed_model)) if not _has_model(available, m)]
     failed = False
     if missing:
+        wanted = missing
         missing, failed = _download(missing, url, options, ask, say, pull)
+        downloaded = [m for m in wanted if m not in missing]
+        if downloaded and not _all_run_here(by_option, say, url, downloaded):
+            return 1
     if missing:
         say("       Download them later with:")
         for model in missing:
@@ -204,15 +225,16 @@ def _explain_model_server_error(
     exc: QuietpostModelError, model_server: ModelServer, server_name: str, url: str, say: Say
 ) -> None:
     """Say why the models couldn't be listed: no answer at all, or the server's reply."""
-    cause = exc.__cause__
-    if isinstance(cause, httpx.HTTPStatusError):
-        response = cause.response
-        detail = " ".join(response.text.split())[:300] or response.reason_phrase
-        say(f"[FAIL] {server_name} at {url} answered HTTP {response.status_code}: {detail}")
-        if response.status_code in (401, 403):
+    reply = error_reply(exc)
+    if reply is not None:
+        status, detail = reply
+        say(f"[FAIL] {server_name} at {url} answered HTTP {status}: {detail}")
+        if status in (401, 403) and model_server == "ollama":
+            say(f"       Ollama itself doesn't ask for a key: is {url} your Ollama?")
+        elif status in (401, 403):
             say(f"       If it needs an API key, set {API_KEY_ENV_VAR} to it and run `quietpost init` again.")
         return
-    if not isinstance(cause, httpx.ConnectError | httpx.TimeoutException):
+    if not isinstance(exc.__cause__, httpx.ConnectError | httpx.TimeoutException):
         say(f"[FAIL] {exc}")
         return
     say(f"[FAIL] {server_name} isn't answering at {url}.")
@@ -245,6 +267,38 @@ def _ollama_models(
         else:
             say(f"[ ok ] GPU memory: {gpu_gb:g} GB, so suggesting {chat_model} ({profile.note})")
     return chat_model, options.embed_model or EMBED_MODEL
+
+
+def _by_option(chat_model: str, embed_model: str) -> dict[str, str]:
+    """The chosen models, by the command-line option that chooses each."""
+    return {"--chat-model": chat_model, "--embed-model": embed_model}
+
+
+def _all_run_here(
+    by_option: dict[str, str],
+    say: Say,
+    ollama_url: str | None = None,
+    ask_about: list[str] | None = None,
+) -> bool:
+    """False, after saying why, when a chosen model would run on another computer.
+
+    A cloud model's name is enough to tell, before anything is downloaded. The
+    models in ``ask_about``, ones Ollama has, are also looked up in the Ollama at
+    ``ollama_url``, which knows when it passes a model on.
+    """
+    hosts = {model: OLLAMA_CLOUD for model in by_option.values() if is_cloud_model_name(model)}
+    if ollama_url and ask_about and not hosts:
+        try:
+            hosts = asyncio.run(_remote_hosts(ollama_url, ask_about))
+        except QuietpostModelError as exc:
+            say(f"[FAIL] {exc}")
+            return False
+    for option, model in by_option.items():
+        if model in hosts:
+            say(f"[FAIL] {runs_elsewhere(model, hosts[model])}.")
+            say(f"       Choose a model that runs on this computer with {option}.")
+            return False
+    return True
 
 
 def _download(
@@ -321,10 +375,14 @@ def _server_models(
 
 
 def _suggest(available: list[str], role: str) -> str:
-    """Embedding models nearly always say so in their name ("nomic-embed-text")."""
-    embedding = [m for m in available if "embed" in m.lower()]
-    others = [m for m in available if m not in embedding]
-    return ((embedding if role == "embedding" else others) or available)[0]
+    """Embedding models nearly always say so in their name ("nomic-embed-text").
+
+    A cloud model, which Quietpost refuses, is never the suggestion.
+    """
+    local = [m for m in available if not is_cloud_model_name(m)] or available
+    embedding = [m for m in local if "embed" in m.lower()]
+    others = [m for m in local if m not in embedding]
+    return ((embedding if role == "embedding" else others) or local)[0]
 
 
 def _write_config(
@@ -419,6 +477,20 @@ async def _list_models(model_server: ModelServer, url: str, api_key: str | None 
     )
     try:
         return await provider.list_models()
+    finally:
+        await provider.aclose()
+
+
+async def _remote_hosts(url: str, models: list[str]) -> dict[str, str]:
+    """The ``models`` the Ollama at ``url`` passes on to another computer, with that computer."""
+    provider = OllamaProvider(url)
+    try:
+        hosts: dict[str, str] = {}
+        for model in dict.fromkeys(models):
+            host = await provider.remote_host(model)
+            if host:
+                hosts[model] = host
+        return hosts
     finally:
         await provider.aclose()
 

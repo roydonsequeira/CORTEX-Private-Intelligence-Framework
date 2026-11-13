@@ -15,6 +15,7 @@ import asyncio
 import os
 import socket
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -107,13 +108,12 @@ def _serve(host: str | None, port: int | None, reload: bool) -> int:
 
     from quietpost.config import get_settings
     from quietpost.exceptions import QuietpostConfigError
-    from quietpost.models.endpoints import ensure_local_model_server
 
     settings = get_settings()
     bind_host = host or settings.api_host
     bind_port = port or settings.api_port
     try:
-        asyncio.run(ensure_local_model_server(settings.model_url))
+        asyncio.run(_check_model_server(settings))
     except QuietpostConfigError as exc:
         print(f"{_FAIL} {exc}")
         return 1
@@ -148,6 +148,23 @@ def _serve(host: str | None, port: int | None, reload: bool) -> int:
     return 0
 
 
+async def _check_model_server(settings: "Settings") -> None:
+    """Refuse a model server or a model that isn't on this computer or the local network.
+
+    Done before the server starts, so the reason is printed plainly. The server
+    checks again as it starts, and the Ollama client before each model's first
+    request.
+    """
+    from quietpost.models.factory import create_provider, ensure_models_run_here
+
+    provider = await create_provider(settings)
+    try:
+        if await provider.health_check():
+            await ensure_models_run_here(provider, settings)
+    finally:
+        await provider.aclose()
+
+
 def doctor() -> int:
     """Print a checklist of everything Quietpost needs; return non-zero on failures."""
     import httpx
@@ -175,17 +192,29 @@ def doctor() -> int:
         return 1
 
     from quietpost.api.server import missing_model_fix, missing_models, start_server_fix
+    from quietpost.models.endpoints import model_refusal
+    from quietpost.models.provider import error_reply
 
     server = "Ollama" if settings.model_server == "ollama" else "Model server"
     try:
-        available = asyncio.run(_server_models(settings))
+        report = asyncio.run(_ask_model_server(settings))
+        available = report.models
         print(f"{_OK} {server} reachable at {settings.model_url} ({len(available)} models)")
     except QuietpostConfigError as exc:
         print(f"{_FAIL} {exc}")
         return failures + 1
     except QuietpostModelError as exc:
-        print(f"{_FAIL} {server} not reachable at {settings.model_url}: {exc}")
-        print(f"       Fix: {start_server_fix(settings)}.")
+        reply = error_reply(exc)
+        if reply is None:
+            print(f"{_FAIL} {server} not reachable at {settings.model_url}: {exc}")
+            print(f"       Fix: {start_server_fix(settings)}.")
+            return failures + 1
+        status, detail = reply
+        print(f"{_FAIL} {server} at {settings.model_url} answered HTTP {status}: {detail}")
+        if status in (401, 403) and settings.model_server == "ollama":
+            print(f"       Ollama itself doesn't ask for a key: is {settings.model_url} your Ollama?")
+        elif status in (401, 403):
+            print("       Fix: set QUIETPOST_MODEL_SERVER_API_KEY (or model_server_api_key) to its API key.")
         return failures + 1
 
     missing = set(missing_models(settings, available))
@@ -197,8 +226,15 @@ def doctor() -> int:
     for setting, model in settings.configured_models.items():
         if setting in unset:
             continue
-        if model in missing:
+        if model in report.elsewhere:
+            print(f"{_FAIL} {model_refusal(setting, model, report.elsewhere[model])}")
+            failures += 1
+        elif model in missing:
             print(f"{_FAIL} {setting}: '{model}' is missing.  Fix: {missing_model_fix(settings, model)}")
+            failures += 1
+        elif model in report.unchecked:
+            print(f"{_FAIL} {setting}: Ollama didn't say where '{model}' runs, so Quietpost won't use it.")
+            print(f"       {report.unchecked[model]}")
             failures += 1
         else:
             print(f"{_OK} {setting}: {model}")
@@ -207,6 +243,8 @@ def doctor() -> int:
     if missing and available and settings.model_server != "ollama":
         # Other servers name models their own way ("qwen2.5-7b-instruct").
         print(f"       The server lists: {', '.join(sorted(available)[:12])}")
+    if settings.model_server == "ollama":
+        _print_cloud_switch(report.cloud_off)
 
     for label, path in (
         ("episodic db", settings.db_path.parent),
@@ -244,15 +282,58 @@ def doctor() -> int:
     return 1 if failures else 0
 
 
-async def _server_models(settings: "Settings") -> set[str]:
-    """The models the configured model server lists (QuietpostModelError if unreachable)."""
+@dataclass
+class _ServerReport:
+    """What `doctor` learned from the model server."""
+
+    models: set[str]
+    # Configured models Ollama passes on to another computer, with that computer.
+    elsewhere: dict[str, str] = field(default_factory=dict)
+    # Configured models Ollama couldn't be asked about, with what went wrong.
+    unchecked: dict[str, str] = field(default_factory=dict)
+    # Whether Ollama's own switch for its cloud models is off; None when unknown.
+    cloud_off: bool | None = None
+
+
+async def _ask_model_server(settings: "Settings") -> _ServerReport:
+    """The models the server lists and, from Ollama, where the configured ones run.
+
+    QuietpostModelError if the server can't be asked; QuietpostConfigError for a
+    public server or a cloud model's name, before anything is asked.
+    """
+    from quietpost.exceptions import QuietpostModelError
     from quietpost.models.factory import create_provider
+    from quietpost.models.provider import OllamaProvider
 
     provider = await create_provider(settings)
     try:
-        return set(await provider.list_models())
+        report = _ServerReport(set(await provider.list_models()))
+        if isinstance(provider, OllamaProvider):
+            for model in dict.fromkeys(settings.configured_models.values()):
+                try:
+                    host = await provider.remote_host(model)
+                except QuietpostModelError as exc:
+                    # Shown only for a model Ollama lists: a missing one is reported as missing.
+                    report.unchecked[model] = str(exc)
+                    continue
+                if host:
+                    report.elsewhere[model] = host
+            report.cloud_off = await provider.cloud_switched_off()
+        return report
     finally:
         await provider.aclose()
+
+
+def _print_cloud_switch(cloud_off: bool | None) -> None:
+    """Recommend Ollama's own switch for its cloud models, a second lock behind Quietpost's."""
+    if cloud_off:
+        print(f"{_OK} Ollama's cloud models are switched off")
+    elif cloud_off is None:
+        print(f"{_WARN} Ollama didn't say whether its cloud models are switched off. Ollama 0.16.2")
+        print("       and later can switch them off with OLLAMA_NO_CLOUD=1. Quietpost won't use them.")
+    else:
+        print(f"{_WARN} Ollama can also run models on ollama.com. Quietpost won't use them; to switch")
+        print("       them off in Ollama too, set OLLAMA_NO_CLOUD=1 for Ollama and restart it.")
 
 
 def _reset_memory(confirmed: bool) -> int:

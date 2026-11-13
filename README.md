@@ -199,6 +199,8 @@ Give the model a context window of at least 8,192 tokens when you load it: LM St
 
 The server must run on this computer or your local network, because your prompts and files go to it. Quietpost refuses a model server on a public internet address, whether you typed an IP address or a name that resolves to one.
 
+It also refuses a model that Ollama passes on to another computer. Ollama's cloud models, whose tag is `cloud` or ends in `-cloud` (such as `gemma4:cloud` or `gpt-oss:120b-cloud`), run on ollama.com even though Ollama itself runs on your machine. A setting that names one is refused before anything is sent. Every other model is checked with Ollama's `/api/show`, which names the host when Ollama passes a model on, so a cloud model under another name is refused too. `quietpost doctor` also tells you whether Ollama's own switch for cloud models is off. To turn them off in Ollama as well, set `OLLAMA_NO_CLOUD=1` for Ollama and restart it (Ollama 0.16.2 and later). Through Ollama's OpenAI-compatible API (`model_server: openai-compatible`), only the model names can be checked.
+
 ## Tool System
 
 Create plugins by inheriting from `BaseTool`, defining a JSON schema, and implementing `execute()`:

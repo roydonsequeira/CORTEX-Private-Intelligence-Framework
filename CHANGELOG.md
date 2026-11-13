@@ -16,6 +16,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `quietpost doctor` and the API stop with an explanation when `model_server_url`
   is, or resolves to, a public internet address. This computer, private networks
   and Tailscale addresses are fine.
+- **Ollama's cloud models are refused.** A model such as `gpt-oss:120b-cloud` or
+  `gemma4:cloud` runs on ollama.com even though Ollama runs on this computer.
+  `quietpost init`, `quietpost serve`, `quietpost doctor` and the API refuse a
+  setting that names one before anything is sent. Every other model is checked
+  with Ollama's `/api/show`, which names the host when Ollama passes a model on,
+  and the Ollama client checks each model again before its first request.
+  `quietpost doctor` says whether Ollama's own switch for cloud models is off, and
+  when it isn't, suggests `OLLAMA_NO_CLOUD=1` (Ollama 0.16.2 and later). Through
+  Ollama's OpenAI-compatible API (`model_server: openai-compatible`), only the
+  model names can be checked.
 - An `extract_model` setting and an `EXTRACT` capability, for reading one email at
   a time with a smaller model. The inbox audit will use it.
 - `GenerationConfig.json_schema` makes either kind of server reply with JSON that
@@ -106,6 +116,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   therefore replaced the workspace-confined filesystem tool with a copy rooted at
   the folder Quietpost was started in, which didn't protect Quietpost's own code.
   One broken tool class also no longer stops the rest of its plugin from loading.
+- **`quietpost doctor` no longer calls a server that refuses it unreachable.** An
+  HTTP 401 or 403 means a server answered, but `doctor` said it was not reachable
+  and to start it. It now shows the server's reply and, for an OpenAI-compatible
+  server, how to give it a key. At Ollama's address it asks whether that is your
+  Ollama, since Ollama itself doesn't ask for a key; `quietpost init` now says the
+  same instead of suggesting a key.
 
 - **Memory no longer breaks on Windows.** In about one memory store in 64, one of
   the two memory collections, facts or tool patterns, failed every read with

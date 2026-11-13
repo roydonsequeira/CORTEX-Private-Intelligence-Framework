@@ -14,6 +14,7 @@ from quietpost.config import settings as settings_module
 from quietpost.config.settings import Settings
 from quietpost.exceptions import QuietpostConfigError, QuietpostModelError
 from quietpost.init_wizard import Folders, InitOptions
+from tests.unit._fake_ollama import OLLAMA_COM, FakeOllama, route_ollama
 
 
 class _Session:
@@ -62,9 +63,15 @@ def _folders(root: Path) -> Folders:
 
 
 def _server_lists(
-    monkeypatch: pytest.MonkeyPatch, models: list[str] | Exception
+    monkeypatch: pytest.MonkeyPatch,
+    models: list[str] | Exception,
+    elsewhere: dict[str, str] | None = None,
 ) -> list[str | None]:
-    """Fake the model server's list of models; returns the API key of each call."""
+    """Fake the model server's list of models; returns the API key of each call.
+
+    Ollama passes each model in ``elsewhere`` on to the host given for it, and runs
+    every other model itself.
+    """
     keys: list[str | None] = []
 
     async def list_models(model_server: str, url: str, api_key: str | None = None) -> list[str]:
@@ -73,7 +80,12 @@ def _server_lists(
             raise models
         return models
 
+    async def remote_hosts(url: str, asked: list[str]) -> dict[str, str]:
+        hosts = elsewhere or {}
+        return {model: hosts[model] for model in asked if model in hosts}
+
     monkeypatch.setattr(init_wizard, "_list_models", list_models)
+    monkeypatch.setattr(init_wizard, "_remote_hosts", remote_hosts)
     return keys
 
 
@@ -367,6 +379,151 @@ def test_an_openai_compatible_server_with_no_terminal_says_to_name_the_models(
     assert _run(tmp_path, session, model_server="openai-compatible") == 1
     assert "Nobody answered (no terminal?). Name the models with --chat-model" in session.output
     assert not _folders(tmp_path).config.exists()
+
+
+@pytest.mark.parametrize(
+    "ollama_has",
+    [
+        {"qwen2.5:7b": None},
+        {"nomic-embed-text:latest": None},  # the other model is there to ask about
+        {"gpt-oss:120b-cloud": OLLAMA_COM, "nomic-embed-text:latest": None},  # pulled before
+    ],
+)
+def test_a_cloud_model_is_refused_before_anything_is_downloaded(
+    ollama_has: dict[str, str | None], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The name is enough, and asking Ollama about it would itself reach ollama.com."""
+    fake = FakeOllama(ollama_has)
+    route_ollama(monkeypatch, init_wizard, fake.transport())
+    session = _Session("")  # would say yes to a download
+
+    assert _run(tmp_path, session, chat_model="gpt-oss:120b-cloud") == 1
+
+    assert (
+        "[FAIL] Ollama passes gpt-oss:120b-cloud on to ollama.com instead of running it on this "
+        "computer, so everything Quietpost sent it would leave this computer."
+    ) in session.lines
+    assert "       Choose a model that runs on this computer with --chat-model." in session.lines
+    assert session.questions == []
+    assert session.pulled == []
+    assert fake.paths() == ["/api/tags"]
+    assert not _folders(tmp_path).config.exists()
+
+
+def test_a_model_ollama_passes_on_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cloud model copied under another name keeps running on ollama.com."""
+    fake = FakeOllama({"my-assistant": OLLAMA_COM, "nomic-embed-text:latest": None})
+    route_ollama(monkeypatch, init_wizard, fake.transport())
+    session = _Session()
+
+    assert _run(tmp_path, session, chat_model="my-assistant", yes=True) == 1
+
+    assert f"[FAIL] Ollama passes my-assistant on to {OLLAMA_COM} instead" in session.output
+    assert "Choose a model that runs on this computer with --chat-model." in session.output
+    assert fake.requests == [
+        ("/api/tags", ""),
+        ("/api/show", "my-assistant"),
+        ("/api/show", "nomic-embed-text"),
+    ]
+    assert not _folders(tmp_path).config.exists()
+
+
+def test_a_model_ollama_will_not_describe_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With its cloud switched off, Ollama won't say where a cloud-backed model runs."""
+    fake = FakeOllama({"my-assistant": OLLAMA_COM, "nomic-embed-text": None}, cloud_off=True)
+    route_ollama(monkeypatch, init_wizard, fake.transport())
+    session = _Session()
+
+    assert _run(tmp_path, session, chat_model="my-assistant", yes=True) == 1
+
+    assert (
+        "[FAIL] Ollama returned HTTP 403 for model 'my-assistant': ollama cloud is disabled"
+    ) in session.output
+    assert not _folders(tmp_path).config.exists()
+
+
+def test_a_downloaded_model_that_ollama_passes_on_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only Ollama can tell, once it has the model."""
+    _server_lists(monkeypatch, ["qwen2.5:7b"], elsewhere={"someone/assistant": OLLAMA_COM})
+    session = _Session("")  # Enter: yes, download
+
+    assert _run(tmp_path, session, chat_model="someone/assistant") == 1
+
+    assert session.pulled == ["someone/assistant", "nomic-embed-text"]
+    refusal = f"[FAIL] Ollama passes someone/assistant on to {OLLAMA_COM} instead of running it"
+    assert session.output.index("[ ok ] Downloaded someone/assistant") < (
+        session.output.index(refusal)
+    )
+    assert not _folders(tmp_path).config.exists()
+
+
+def test_models_that_run_here_are_checked_and_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeOllama({"qwen2.5:7b": None, "nomic-embed-text:latest": None})
+    route_ollama(monkeypatch, init_wizard, fake.transport())
+
+    assert _run(tmp_path, _Session(), yes=True) == 0
+
+    assert fake.paths() == ["/api/tags", "/api/show", "/api/show"]
+    config = yaml.safe_load(_folders(tmp_path).config.read_text(encoding="utf-8"))
+    assert (config["chat_model"], config["embed_model"]) == ("qwen2.5:7b", "nomic-embed-text")
+
+
+def test_another_server_never_suggests_a_cloud_model_and_refuses_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ollama's OpenAI-compatible API lists its cloud models along with the rest."""
+    _server_lists(monkeypatch, ["gpt-oss:120b-cloud", "qwen2.5:7b", "nomic-embed-text:latest"])
+
+    suggested = _Session("", "")  # Enter twice: take both suggestions
+    assert _run(tmp_path / "a", suggested, model_server="openai-compatible") == 0
+    assert suggested.questions == ["Number [2]: ", "Number [3]: "]
+
+    chosen = _Session("1", "")  # the cloud model as the chat model
+    assert _run(tmp_path / "b", chosen, model_server="openai-compatible") == 1
+    assert "[FAIL] Ollama passes gpt-oss:120b-cloud on to ollama.com" in chosen.output
+    assert "Choose a model that runs on this computer with --chat-model." in chosen.output
+    assert not _folders(tmp_path / "b").config.exists()
+
+
+def test_a_401_at_ollamas_address_is_not_blamed_on_a_missing_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ollama asks for no key, so whatever answered there isn't a plain Ollama."""
+    _server_lists(monkeypatch, _server_error(_http_error(401, "Unauthorized")))
+    session = _Session()
+
+    assert _run(tmp_path, session) == 1
+
+    assert "[FAIL] Ollama at http://localhost:11434 answered HTTP 401: Unauthorized" in (
+        session.output
+    )
+    assert "Ollama itself doesn't ask for a key: is http://localhost:11434 your Ollama?" in (
+        session.output
+    )
+    assert "QUIETPOST_MODEL_SERVER_API_KEY" not in session.output
+
+
+@pytest.mark.asyncio
+async def test_remote_hosts_asks_ollama_once_about_each_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeOllama({"my-assistant": OLLAMA_COM, "qwen2.5:7b": None})
+    route_ollama(monkeypatch, init_wizard, fake.transport())
+
+    hosts = await init_wizard._remote_hosts(
+        "http://localhost:11434", ["my-assistant", "qwen2.5:7b", "my-assistant"]
+    )
+
+    assert hosts == {"my-assistant": OLLAMA_COM}
+    assert fake.requests == [("/api/show", "my-assistant"), ("/api/show", "qwen2.5:7b")]
 
 
 def test_init_writes_the_config_that_quietpost_config_names(

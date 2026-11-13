@@ -15,6 +15,7 @@ import structlog
 from pydantic import BaseModel
 
 from quietpost.exceptions import QuietpostModelError
+from quietpost.models.endpoints import OLLAMA_CLOUD, is_cloud_model_name, runs_elsewhere
 from quietpost.observability.metrics import record_llm_latency
 from quietpost.observability.tracing import get_tracer
 
@@ -178,6 +179,9 @@ class OllamaProvider:
     between requests so a pause in a demo does not trigger a cold reload.
     ``think`` turns a thinking model's reasoning on or off (None leaves Ollama's
     default, which is on); a model that cannot think accepts False.
+    ``local_only`` refuses, before its first request, a model Ollama would pass on
+    to another computer (see remote_host); models/factory.py always sets it.
+    ``transport`` replaces the network, for tests.
     """
 
     def __init__(
@@ -187,11 +191,16 @@ class OllamaProvider:
         num_ctx: int | None = None,
         keep_alive: str | None = None,
         think: bool | None = None,
+        local_only: bool = False,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._base_url = prefer_ipv4_loopback(base_url.rstrip("/"))
         self._num_ctx = num_ctx
         self._keep_alive = keep_alive
         self._think = think
+        self._local_only = local_only
+        # Models Ollama said it runs on this computer; each is asked about once.
+        self._runs_here: set[str] = set()
         # Models Ollama rejected with "does not support tools" (e.g. gemma3,
         # deepseek-r1). They are called without tools from then on, so the agent
         # still answers — directly — instead of failing every request.
@@ -202,6 +211,7 @@ class OllamaProvider:
             # Never through an HTTP(S)_PROXY from the environment: prompts and
             # email go to the model server directly, not via another host.
             trust_env=False,
+            transport=transport,
         )
 
     @property
@@ -263,6 +273,45 @@ class OllamaProvider:
             return f"Ollama returned HTTP {status} for model '{model}': {detail}"
         return f"Ollama request failed: {exc}"
 
+    async def remote_host(self, model: str) -> str | None:
+        """The computer Ollama passes ``model`` on to, or None when it runs the model here.
+
+        A cloud model's name is enough to tell, so Ollama isn't asked about one:
+        asking would itself reach ollama.com. Any other model is looked up with
+        /api/show, which names the host when Ollama passes the model on (as it
+        does for a cloud model copied or created under another name). Raises
+        QuietpostModelError when Ollama doesn't have the model or can't be asked.
+        """
+        if is_cloud_model_name(model):
+            return OLLAMA_CLOUD
+        if model in self._runs_here:
+            return None
+        try:
+            response = await self._client.post("/api/show", json={"model": model})
+            response.raise_for_status()
+            details = response.json()
+        except httpx.HTTPError as exc:
+            raise QuietpostModelError(self._describe_error(exc, model)) from exc
+        except ValueError as exc:
+            raise QuietpostModelError(f"Ollama sent an unreadable reply about '{model}'") from exc
+        if not isinstance(details, dict):
+            raise QuietpostModelError(f"Ollama sent an unreadable reply about '{model}'")
+        if details.get("remote_host"):
+            return str(details["remote_host"])
+        self._runs_here.add(model)
+        return None
+
+    async def _refuse_if_elsewhere(self, model: str) -> None:
+        """With local_only, stop before any request for a model Ollama passes on."""
+        if not self._local_only:
+            return
+        host = await self.remote_host(model)
+        if host:
+            raise QuietpostModelError(
+                f"{runs_elsewhere(model, host)}. Quietpost sent it nothing. Choose a model "
+                "that runs on this computer in quietpost.yaml, then restart Quietpost."
+            )
+
     async def complete(
         self,
         model: str,
@@ -271,6 +320,7 @@ class OllamaProvider:
         tools: list[dict[str, Any]] | None = None,
     ) -> ModelResponse:
         """Call the Ollama /api/chat endpoint and return a normalised ModelResponse."""
+        await self._refuse_if_elsewhere(model)
         cfg = config or GenerationConfig()
         if model in self._no_tool_models:
             tools = None
@@ -319,6 +369,7 @@ class OllamaProvider:
         rather than buffered. Tool calls, when the model emits them, arrive on the
         chunks and are surfaced verbatim so the caller can still route tool use.
         """
+        await self._refuse_if_elsewhere(model)
         cfg = config or GenerationConfig()
         if model in self._no_tool_models:
             tools = None
@@ -396,6 +447,7 @@ class OllamaProvider:
         single request; falls back to the per-item ``/api/embeddings`` loop when
         the batch endpoint is unavailable on this Ollama version.
         """
+        await self._refuse_if_elsewhere(model)
         inputs = [text] if isinstance(text, str) else text
         with _tracer.start_as_current_span("ollama.embed") as span:
             span.set_attribute("model", model)
@@ -446,12 +498,29 @@ class OllamaProvider:
         except Exception:
             return False
 
+    async def cloud_switched_off(self) -> bool | None:
+        """Whether Ollama's own switch for its cloud models is off (OLLAMA_NO_CLOUD=1).
+
+        None when Ollama doesn't say: it reports this at /api/status from version
+        0.16.2.
+        """
+        try:
+            response = await self._client.get("/api/status", timeout=5.0)
+            response.raise_for_status()
+            status = response.json()
+        except (httpx.HTTPError, ValueError):
+            return None
+        cloud = status.get("cloud") if isinstance(status, dict) else None
+        disabled = cloud.get("disabled") if isinstance(cloud, dict) else None
+        return disabled if isinstance(disabled, bool) else None
+
     async def warmup(self, model: str) -> None:
         """Load a chat model into memory ahead of the first request.
 
         An empty-prompt /api/generate loads the weights without generating. The
         same ``num_ctx`` as real calls is sent so the first chat does not reload.
         """
+        await self._refuse_if_elsewhere(model)
         payload: dict[str, Any] = {"model": model}
         if self._num_ctx:
             payload["options"] = {"num_ctx": self._num_ctx}
@@ -480,6 +549,19 @@ def prefer_ipv4_loopback(url: str) -> str:
         return url
     netloc = "127.0.0.1" + (f":{parts.port}" if parts.port else "")
     return urlunsplit(parts._replace(netloc=netloc))
+
+
+def error_reply(exc: BaseException) -> tuple[int, str] | None:
+    """The status and text of the model server's error reply behind ``exc``.
+
+    None when the server sent no reply at all: it isn't running, or didn't answer
+    in time.
+    """
+    cause = exc.__cause__
+    if not isinstance(cause, httpx.HTTPStatusError):
+        return None
+    response = cause.response
+    return response.status_code, " ".join(response.text.split())[:300] or response.reason_phrase
 
 
 def _error_detail(response: httpx.Response) -> str:

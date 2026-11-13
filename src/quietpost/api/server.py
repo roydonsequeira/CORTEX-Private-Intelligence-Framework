@@ -30,7 +30,7 @@ from quietpost.memory.manager import MemoryManager
 from quietpost.memory.procedural import ProceduralMemory
 from quietpost.memory.semantic import SemanticMemory
 from quietpost.memory.working import WorkingMemory
-from quietpost.models.factory import create_provider
+from quietpost.models.factory import create_provider, ensure_models_run_here
 from quietpost.models.provider import ModelProvider
 from quietpost.models.router import ModelRouter
 from quietpost.observability.logging import configure_logging
@@ -117,7 +117,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     setup_tracing("quietpost-api", settings.otel_endpoint, enabled=settings.telemetry_enabled)
     setup_metrics(settings.otel_endpoint if settings.telemetry_enabled else None)
 
-    # Refuses a model server on a public address before anything is sent to it.
+    # Refuses a model server on a public address, or a model that runs on another
+    # computer, before anything is sent to it.
     provider = await create_provider(settings)
     await _check_models(provider, settings)
 
@@ -198,7 +199,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 async def _check_models(provider: ModelProvider, settings: Settings) -> None:
-    """Log, at startup, exactly which configured models are missing and how to fix it."""
+    """Log, at startup, exactly which configured models are missing and how to fix it.
+
+    Raises QuietpostConfigError, so the server doesn't start, when Ollama passes a
+    configured model on to another computer.
+    """
     if not await provider.health_check():
         logger.critical(
             "model_server_unreachable",
@@ -214,6 +219,7 @@ async def _check_models(provider: ModelProvider, settings: Settings) -> None:
         return
     for model in missing_models(settings, available):
         logger.critical("model_missing", model=model, fix=missing_model_fix(settings, model))
+    await ensure_models_run_here(provider, settings)
 
 
 def missing_models(settings: Settings, available: set[str]) -> list[str]:
