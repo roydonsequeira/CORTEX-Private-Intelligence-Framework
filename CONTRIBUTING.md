@@ -43,8 +43,8 @@ Run before opening a PR:
 
 ```bash
 python -m pytest tests/ -v
-python -m ruff check src tests
-python -m mypy src tests
+python -m ruff check src tests scripts
+python -m mypy src tests scripts
 cd ui && npm run lint && npm run typecheck && npm run build && npm run build:bundle
 ```
 
@@ -73,6 +73,11 @@ Before proposing major changes, read:
 - ADR-004: Why LATS
 
 New architectural changes should include a short ADR using Context, Decision, and Consequences.
+
+## Releases
+
+A maintainer releases by pushing a version tag; CI builds, checks and publishes
+the package. [RELEASING.md](RELEASING.md) has the steps.
 
 ## Pull Requests
 

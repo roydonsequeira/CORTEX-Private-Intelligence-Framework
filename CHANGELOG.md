@@ -56,6 +56,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   server started with an API key, it reads the key from
   `QUIETPOST_MODEL_SERVER_API_KEY` and never writes it to the file. It warns when
   a `quietpost.yaml` in the current folder or above it would be read instead.
+- **Releases are built and published by CI.** Pushing a version tag such as
+  `v2.0.0a1` builds the UI into the package, then the sdist and the wheel, and
+  checks them: the version must equal the tag, and the wheel must hold the UI,
+  the shipped plugins and every other file of the package. Once a maintainer
+  approves the run, the files go to PyPI through trusted publishing, each with a
+  signed attestation that names this repository's release workflow. Building
+  Quietpost no longer needs the `wheel` package. [RELEASING.md](RELEASING.md) has
+  the steps.
 
 ### Changed
 

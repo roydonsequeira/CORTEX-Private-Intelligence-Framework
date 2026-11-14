@@ -10,6 +10,12 @@ updates:
         patterns:
           - "*"
 
+  # The release build tools, pinned with hashes (.github/workflows/release.yml).
+  - package-ecosystem: "pip"
+    directory: "/.github/release"
+    schedule:
+      interval: "weekly"
+
   - package-ecosystem: "npm"
     directory: "/ui"
     schedule:

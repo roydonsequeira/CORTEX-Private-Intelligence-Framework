@@ -1,5 +1,6 @@
 [build-system]
-requires = ["setuptools>=84.2.1", "wheel"]
+# setuptools builds wheels itself since 70.1, so the `wheel` package isn't needed.
+requires = ["setuptools>=84.2.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
