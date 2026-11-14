@@ -45,7 +45,7 @@ export function ChatInput({ disabled, onSubmit }: ChatInputProps) {
                 submit();
               }
             }}
-            placeholder="Ask CORTEX to reason, use a local tool, or recall memory…"
+            placeholder="Ask Quietpost to reason, use a local tool, or recall memory…"
             rows={2}
             maxLength={MAX_MESSAGE_CHARS}
             className="w-full resize-none border-0 bg-transparent px-4 pt-3.5 text-[15px] leading-relaxed text-ink placeholder:text-ink-faint focus:ring-0"

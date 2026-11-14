@@ -23,4 +23,4 @@ lint:
 
 clean:
 	docker compose -f infra/docker-compose.yml down -v
-	rm -rf .cortex/
+	rm -rf .quietpost/

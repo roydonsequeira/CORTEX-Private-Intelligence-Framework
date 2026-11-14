@@ -1,0 +1,64 @@
+# Quietpost configuration. Every key can be overridden with a QUIETPOST_<KEY>
+# environment variable (lists and nested blocks as JSON), e.g.
+#   QUIETPOST_CHAT_MODEL=llama3.1:8b   QUIETPOST_API_KEY=change-me
+# Run `quietpost doctor` after editing to check the setup.
+
+# --- Models -------------------------------------------------------------------
+# ollama, or openai-compatible for LM Studio, llama.cpp's llama-server or vLLM.
+# The server must be on this computer or your local network: Quietpost refuses
+# one on a public internet address.
+model_server: ollama
+# Unset: http://localhost:11434 for Ollama, http://localhost:1234/v1 (LM Studio)
+# for openai-compatible. llama-server: http://localhost:8080/v1.
+# model_server_url: http://localhost:11434
+# One tool-capable model for every role: a single `ollama pull`. On another
+# server, use the model's name as the server lists it.
+chat_model: qwen2.5:7b
+# reasoning_model, code_model and extract_model use chat_model unless set.
+embed_model: nomic-embed-text
+
+# --- Storage (created on first run; wipe with `quietpost reset-memory --yes`) --
+# Relative paths in this file are relative to this file's folder.
+chroma_path: ./.quietpost/chroma
+db_path: ./.quietpost/quietpost.db
+
+# --- API ----------------------------------------------------------------------
+# Loopback only by default: the agent can run code and read/write workspace
+# files. To expose it, set api_host, api_key, allowed_hosts and cors_origins.
+api_host: 127.0.0.1
+api_port: 8000
+log_level: INFO
+
+# --- Observability ------------------------------------------------------------
+# Off for native runs (no collector). The Docker stack turns it on for Jaeger.
+telemetry_enabled: false
+otel_endpoint: http://localhost:4317
+
+# --- Agent and tools ----------------------------------------------------------
+max_agent_steps: 10
+# The plugins that ship with Quietpost always load. To add your own, put them in
+# a folder and name it here. Plugin code runs unsandboxed: add only code you trust.
+# plugins_dir: ./plugins
+# The only folder the agent can read and write (created on start). Keep it
+# separate from this project: the agent must not reach quietpost.yaml or Quietpost's
+# own code. Hidden files (.env, .git, ...) are off-limits wherever it points.
+allowed_root: ./workspace
+allowed_write_extensions:
+  - .txt
+  - .md
+  - .json
+  - .csv
+  - .py
+tool_timeout_seconds: 30.0
+code_exec_timeout_seconds: 10.0
+lats:
+  enabled: false
+  max_depth: 5
+  n_branches: 3
+  budget: 10
+supervisor:
+  max_workers: 3
+rate_limit:
+  enabled: true
+  requests_per_minute: 200
+  chat_requests_per_minute: 60

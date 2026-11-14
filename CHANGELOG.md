@@ -6,17 +6,150 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **LM Studio, llama.cpp and vLLM.** With `model_server: openai-compatible`,
+  Quietpost uses any local server with an OpenAI-compatible API instead of Ollama.
+  `model_server_url` defaults to LM Studio's `http://localhost:1234/v1`, and
+  `model_server_api_key` is for a server started with a key.
+- **A model server on a public address is refused.** `quietpost serve`,
+  `quietpost doctor` and the API stop with an explanation when `model_server_url`
+  is, or resolves to, a public internet address. This computer, private networks
+  and Tailscale addresses are fine.
+- **Ollama's cloud models are refused.** A model such as `gpt-oss:120b-cloud` or
+  `gemma4:cloud` runs on ollama.com even though Ollama runs on this computer.
+  `quietpost init`, `quietpost serve`, `quietpost doctor` and the API refuse a
+  setting that names one before anything is sent. Every other model is checked
+  with Ollama's `/api/show`, which names the host when Ollama passes a model on,
+  and the Ollama client checks each model again before its first request.
+  `quietpost doctor` says whether Ollama's own switch for cloud models is off, and
+  when it isn't, suggests `OLLAMA_NO_CLOUD=1` (Ollama 0.16.2 and later). Through
+  Ollama's OpenAI-compatible API (`model_server: openai-compatible`), only the
+  model names can be checked.
+- An `extract_model` setting and an `EXTRACT` capability, for reading one email at
+  a time with a smaller model. The inbox audit will use it.
+- `GenerationConfig.json_schema` makes either kind of server reply with JSON that
+  matches a schema.
+- `ollama_think` (off by default) turns a thinking model's reasoning on. With it
+  off, qwen3 and qwen3.5 answer in 1-2 seconds instead of 17-35 on a 6 GB GPU.
+- **Settings from any folder.** When there's no `quietpost.yaml` in the current
+  folder or above it, Quietpost reads the one in your user config folder:
+  `%LOCALAPPDATA%\quietpost` on Windows, `~/Library/Application Support/quietpost`
+  on macOS and `~/.config/quietpost` on Linux. `QUIETPOST_CONFIG` and a project's
+  own `quietpost.yaml` still come first, and `quietpost doctor` names this folder
+  when it finds no config. This adds the `platformdirs` dependency.
+- **The UI ships inside the Python package.** `quietpost serve` serves it on the
+  API's own address, http://localhost:8000, so Quietpost no longer needs Node.js
+  or a second terminal. The page calls only the server it came from, and gets the
+  same Content-Security-Policy and other security headers as the UI's own server.
+  In a source checkout, `npm run build:bundle` in `ui/` builds it into the package;
+  `npm run dev` and the Docker image work as before. While `api_key` is set the UI
+  can't be used, since it can't send the key yet, and `quietpost serve` says so.
+- **`quietpost init` sets Quietpost up in one go.** It checks the model server,
+  suggests a chat model for your GPU, offers to download what Ollama is missing
+  (with the size, such as 4.7 GB for qwen2.5:7b), and writes `quietpost.yaml` to
+  your user config folder, or to the file `QUIETPOST_CONFIG` names. Memory goes in
+  your user data folder, and the workspace in `Quietpost` in your home folder
+  rather than in Documents, which OneDrive and iCloud often sync. `--data-dir` and
+  `--workspace` choose other folders. It downloads only after you answer yes (or
+  pass `--yes`); with no terminal to answer, it says what to pull instead. For a
+  server started with an API key, it reads the key from
+  `QUIETPOST_MODEL_SERVER_API_KEY` and never writes it to the file. It warns when
+  a `quietpost.yaml` in the current folder or above it would be read instead.
+- **Releases are built and published by CI.** Pushing a version tag such as
+  `v2.0.0a1` builds the UI into the package, then the sdist and the wheel, and
+  checks them: the version must equal the tag, and the wheel must hold the UI,
+  the shipped plugins and every other file of the package. Once a maintainer
+  approves the run, the files go to PyPI through trusted publishing, each with a
+  signed attestation that names this repository's release workflow. Building
+  Quietpost no longer needs the `wheel` package. [RELEASING.md](RELEASING.md) has
+  the steps.
+
 ### Changed
 
+- **CORTEX is now Quietpost.** The package, the command, the config file and the
+  environment variables are renamed:
+  - `pip install quietpost`, and `quietpost serve`, `quietpost doctor` and
+    `quietpost reset-memory`;
+  - `quietpost.yaml`, the `QUIETPOST_*` environment variables, and
+    `NEXT_PUBLIC_QUIETPOST_API_URL` for the UI;
+  - new data goes in `.quietpost/`.
+
+  **Upgrading from 1.x needs no changes.** A `cortex.yaml`, `CORTEX_*` variables
+  (including `CORTEX_CONFIG`) and `NEXT_PUBLIC_CORTEX_API_URL` are still read, the
+  new names win when both are set, and memory in `.cortex/` keeps working where it
+  is until a `.quietpost/` folder exists. Nothing is moved or copied.
+
+  With Docker, the data volume is now `quietpost_data`. To bring 1.x memory
+  across once, before the first `docker compose up`:
+  `docker run --rm -v infra_cortex_data:/from -v infra_quietpost_data:/to alpine cp -a /from/. /to/`.
+- **Model settings have server-neutral names:** `ollama_model` is now
+  `chat_model`, `ollama_base_url` is `model_server_url`, and
+  `ollama_timeout_seconds` is `model_timeout_seconds`. The old names are still
+  read, and the new name wins when both are set. `ollama_num_ctx` and
+  `ollama_keep_alive` keep their names and apply to Ollama only.
+- `reasoning_model` and `code_model` now default to `chat_model`. Both defaults
+  were already `qwen2.5:7b`, the same as the chat model, so a setup changes only
+  if it sets the chat model and not these two: they now follow it.
+- `/health` reports `model_server`. The `ollama` field stays, with the same
+  value, for clients written for 1.x.
+- Model requests ignore `HTTP_PROXY` and `HTTPS_PROXY`, so prompts go straight to
+  the model server.
 - The UI's Docker image and CI job run on Node.js 26 LTS (Active LTS since 28
   October 2026); the UI still needs Node.js 20.9 or newer.
-- The README is rewritten around what the guards do and what was measured. It
-  now dates the live battery results (v1.2.1), lists the known gaps, including
-  the `web_fetch` DNS-rebinding window (#41), and replaces the old roadmap with
-  the open issues.
+- **qwen2.5:7b stays the default model.** On 2 Nov 2026 it ran the 39-case live
+  test plan against qwen3:8b and qwen3.5:4b on a 6 GB GPU, under a rule set before
+  the runs: most passes, no failed safety case, and speed breaks ties. qwen2.5:7b
+  passed 39/39. qwen3:8b recited its system prompt to a jailbreak prompt, and
+  qwen3.5:4b once said it had written a file when both writes had failed. The
+  results are in `evals/live_battery/README.md`.
+- **`plugins_dir` is now for your own plugins, and is unset by default.** The
+  plugins that ship with Quietpost, such as the calculator, always load from the
+  package, and the folder `plugins_dir` names loads after them. A plugin no longer
+  replaces a tool that is already registered; it is skipped with a
+  `plugin_tool_name_taken` warning. An empty `plugins_dir` means no folder. It
+  used to mean the current folder, so every `.py` file there ran on start.
 
 ### Fixed
 
+- **The calculator loads in every install.** Plugins were read only from
+  `plugins_dir`, which defaulted to `./src/quietpost/tools/plugins` under the
+  folder Quietpost was started in. The calculator loaded only when a
+  `quietpost.yaml` named the source folder, as the repo's own one did, or when
+  Quietpost was started in a checkout's root folder. The prompts mention the
+  calculator either way, so without it arithmetic went to `python_exec`.
+- **A plugin registers only the tools it defines.** Every tool class in a plugin's
+  namespace was registered, imported ones included, and a later tool replaced an
+  earlier one with the same name. A plugin that imported `FileSystemTool`
+  therefore replaced the workspace-confined filesystem tool with a copy rooted at
+  the folder Quietpost was started in, which didn't protect Quietpost's own code.
+  One broken tool class also no longer stops the rest of its plugin from loading.
+- **`quietpost doctor` no longer calls a server that refuses it unreachable.** An
+  HTTP 401 or 403 means a server answered, but `doctor` said it was not reachable
+  and to start it. It now shows the server's reply and, for an OpenAI-compatible
+  server, how to give it a key. At Ollama's address it asks whether that is your
+  Ollama, since Ollama itself doesn't ask for a key; `quietpost init` now says the
+  same instead of suggesting a key.
+
+- **Memory no longer breaks on Windows.** In about one memory store in 64, one of
+  the two memory collections, facts or tool patterns, failed every read with
+  "Error creating hnsw segment reader: Nothing found on disk", and restarting
+  didn't help. Chroma 1.5.9 keeps a small collection's index only in a cache. On
+  Windows that cache has room for one index per shard, so the two collections
+  could push each other out. Quietpost now raises the limit Chroma sizes the cache
+  from, which gives each shard room for six. On Linux and macOS the open-file
+  limit is raised to 2,048 when it's lower. A store that already fails works again
+  with everything in it, so there's no need to reset memory.
+- **Raw tool calls no longer reach the chat.** When a run hit its time limit,
+  Quietpost asked the model for a final answer with no tools, and qwen3:8b could
+  reply with a `<tool_call>` block, which was shown as the answer. A reply that is
+  nothing but a tool call now counts as no answer.
+- **"List the files" no longer ends in a guess.** qwen2.5:7b could call the listing
+  with no path. The call failed, and the model named the files anyway. A listing
+  with no path now lists the workspace.
+- **"Write code and run it" now runs it.** qwen3:8b could plan this as a written
+  answer, with no tools, and list output that nothing had produced. A request that
+  says "and run it" now always gets a Python step.
 - **The README's install command for the container sandbox pointed at someone
   else's package.** `pip install 'cortex-agent[container]'` installs an
   unrelated project that uses that name on PyPI. The command is now

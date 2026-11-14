@@ -6,7 +6,7 @@ Agent output is primarily a one-way event stream: session IDs, plans, step start
 
 ## Decision
 
-CORTEX uses Server-Sent Events for `/chat/stream` instead of WebSockets.
+Quietpost uses Server-Sent Events for `/chat/stream` instead of WebSockets.
 
 ## Consequences
 

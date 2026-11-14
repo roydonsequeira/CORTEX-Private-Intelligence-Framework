@@ -1,6 +1,10 @@
 import type { AgentState, MemorySearchResult, ToolSchema } from "./types";
 
-const API_URL = process.env.NEXT_PUBLIC_CORTEX_API_URL ?? "http://localhost:8000";
+// NEXT_PUBLIC_CORTEX_API_URL is the name from before the rename to Quietpost.
+const API_URL =
+  process.env.NEXT_PUBLIC_QUIETPOST_API_URL ??
+  process.env.NEXT_PUBLIC_CORTEX_API_URL ??
+  "http://localhost:8000";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {

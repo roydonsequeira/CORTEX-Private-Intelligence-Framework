@@ -14,14 +14,14 @@ from uuid import uuid4
 import chromadb
 import pytest
 
-from cortex.memory.base import MemoryEntry, MemoryQuery
-from cortex.memory.episodic import EpisodicMemory
-from cortex.memory.manager import MemoryManager
-from cortex.memory.procedural import ProceduralMemory
-from cortex.memory.semantic import SemanticMemory
-from cortex.memory.working import WorkingMemory
-from cortex.models.provider import ModelResponse, OllamaProvider
-from cortex.tools.builtin.doc_search import DocumentSearchTool
+from quietpost.memory.base import MemoryEntry, MemoryQuery
+from quietpost.memory.episodic import EpisodicMemory
+from quietpost.memory.manager import MemoryManager
+from quietpost.memory.procedural import ProceduralMemory
+from quietpost.memory.semantic import SemanticMemory
+from quietpost.memory.working import WorkingMemory
+from quietpost.models.provider import ModelResponse, OllamaProvider
+from quietpost.tools.builtin.doc_search import DocumentSearchTool
 
 CASES = {
     "SM-01 json": (
@@ -68,7 +68,7 @@ async def _consolidate(
             model="fake", input_tokens=1, output_tokens=1, latency_ms=1.0, raw={},
         )
     )
-    episodic = EpisodicMemory(tmp_path / "cortex.db")
+    episodic = EpisodicMemory(tmp_path / "quietpost.db")
     await episodic.initialize()
     await episodic.store(_entry(user, "s1", "user"))
     await episodic.store(_entry(assistant, "s1", "assistant"))
@@ -111,7 +111,7 @@ async def test_an_indexed_document_is_never_offered_as_facts_about_the_user(
     """doc_search keeps chunks in the same store as the user's facts; only facts are context."""
     provider = AsyncMock(spec=OllamaProvider)
     provider.embed = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
-    episodic = EpisodicMemory(tmp_path / "cortex.db")
+    episodic = EpisodicMemory(tmp_path / "quietpost.db")
     semantic = SemanticMemory(
         tmp_path / "chroma", "embed", provider, episodic_memory=episodic,
         client=chromadb.EphemeralClient(), collection_name=f"sr04_{uuid4().hex[:8]}",

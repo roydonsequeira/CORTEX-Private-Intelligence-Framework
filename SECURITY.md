@@ -32,7 +32,7 @@ a fix before any public disclosure.
 
 ## Threat model and scope
 
-CORTEX is designed to run on hardware you control. Its guardrails chiefly
+Quietpost is designed to run on hardware you control. Its guardrails chiefly
 contain code the LLM generates from a malicious or injected prompt. By default
 the API is reachable only from the local machine: it binds to `127.0.0.1`,
 accepts browser requests only from the local UI's origin, rejects unknown
@@ -46,7 +46,7 @@ In scope:
 - sandbox escapes from `python_exec` (see the RestrictedPython notes in the README),
 - filesystem-guard bypasses (workspace-root escape through the filesystem tool,
   `doc_search` or `python_exec`'s read-only `open()`, writes through `open()`,
-  extension bypass, reading hidden files such as `.env`, writing into CORTEX's
+  extension bypass, reading hidden files such as `.env`, writing into Quietpost's
   own code or plugins folder),
 - ways for text the agent reads (a file, a document, a web page) to make it send
   data off the machine, for example through a fetched URL or an image in an answer,

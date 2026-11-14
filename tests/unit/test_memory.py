@@ -1,4 +1,4 @@
-"""Unit tests for CORTEX memory tiers."""
+"""Unit tests for Quietpost memory tiers."""
 
 import asyncio
 import json
@@ -11,13 +11,13 @@ from uuid import uuid4
 import chromadb
 import pytest
 
-from cortex.memory.base import MemoryEntry, MemoryQuery
-from cortex.memory.episodic import EpisodicMemory
-from cortex.memory.manager import MemoryManager
-from cortex.memory.procedural import ProceduralMemory
-from cortex.memory.semantic import SemanticMemory
-from cortex.memory.working import WorkingMemory
-from cortex.models.provider import ModelResponse, OllamaProvider
+from quietpost.memory.base import MemoryEntry, MemoryQuery
+from quietpost.memory.episodic import EpisodicMemory
+from quietpost.memory.manager import MemoryManager
+from quietpost.memory.procedural import ProceduralMemory
+from quietpost.memory.semantic import SemanticMemory
+from quietpost.memory.working import WorkingMemory
+from quietpost.models.provider import ModelResponse, OllamaProvider
 
 
 def _entry(content: str, memory_type: str = "working", **metadata: object) -> MemoryEntry:
@@ -35,7 +35,7 @@ def _mock_provider() -> OllamaProvider:
     provider.embed = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
     provider.complete = AsyncMock(
         return_value=ModelResponse(
-            content='["The user prefers local-only AI.", "The user\'s project is named CORTEX."]',
+            content='["The user prefers local-only AI.", "The user\'s project is named Quietpost."]',
             model="llama3.1:8b",
             input_tokens=1,
             output_tokens=1,
@@ -61,7 +61,7 @@ async def test_working_memory_drops_oldest_on_overflow() -> None:
 @pytest.mark.asyncio
 async def test_episodic_memory_stores_and_retrieves_session(tmp_path: Path) -> None:
     """EpisodicMemory stores and retrieves entries scoped to a session."""
-    memory = EpisodicMemory(tmp_path / "cortex.db")
+    memory = EpisodicMemory(tmp_path / "quietpost.db")
     await memory.initialize()
     await memory.store(
         _entry(
@@ -89,7 +89,7 @@ async def test_episodic_memory_stores_and_retrieves_session(tmp_path: Path) -> N
 @pytest.mark.asyncio
 async def test_episodic_memory_returns_ordered_history(tmp_path: Path) -> None:
     """Session history is returned in chronological order."""
-    memory = EpisodicMemory(tmp_path / "cortex.db")
+    memory = EpisodicMemory(tmp_path / "quietpost.db")
     await memory.initialize()
     await memory.store(_entry("first", "episodic", session_id="s1", role="user"))
     await memory.store(_entry("second", "episodic", session_id="s1", role="assistant"))
@@ -102,7 +102,7 @@ async def test_episodic_memory_returns_ordered_history(tmp_path: Path) -> None:
 async def test_semantic_memory_consolidate_extracts_facts(tmp_path: Path) -> None:
     """SemanticMemory.consolidate extracts facts via the model and stores them."""
     provider = _mock_provider()
-    episodic = EpisodicMemory(tmp_path / "cortex.db")
+    episodic = EpisodicMemory(tmp_path / "quietpost.db")
     await episodic.initialize()
     await episodic.store(_entry("I prefer local AI.", "episodic", session_id="s1", role="user"))
 
@@ -125,7 +125,7 @@ async def test_semantic_memory_consolidate_extracts_facts(tmp_path: Path) -> Non
 async def test_memory_manager_retrieve_context_dedupes(tmp_path: Path) -> None:
     """MemoryManager.retrieve_context deduplicates overlapping memory entries."""
     provider = _mock_provider()
-    episodic = EpisodicMemory(tmp_path / "cortex.db")
+    episodic = EpisodicMemory(tmp_path / "quietpost.db")
     semantic = SemanticMemory(
         tmp_path / "semantic",
         "nomic-embed-text",
@@ -142,17 +142,17 @@ async def test_memory_manager_retrieve_context_dedupes(tmp_path: Path) -> None:
     manager = MemoryManager(WorkingMemory(), episodic, semantic, procedural)
     await manager.initialize()
 
-    await manager.store_turn("s1", "user", "The project is called CORTEX.")
+    await manager.store_turn("s1", "user", "The project is called Quietpost.")
     await semantic.store(
         _entry(
-            "The project is called CORTEX.",
+            "The project is called Quietpost.",
             "semantic",
             source_session="s1",
         )
     )
 
     context = await manager.retrieve_context("project", "s1")
-    assert context.count("The project is called CORTEX.") == 1
+    assert context.count("The project is called Quietpost.") == 1
 
 
 @pytest.mark.asyncio
@@ -191,10 +191,26 @@ async def test_semantic_and_procedural_share_one_chroma_client(tmp_path: Path) -
         assert await semantic.retrieve(MemoryQuery(text="fact", top_k=3))
 
 
+def test_chroma_client_keeps_every_small_collection_readable(tmp_path: Path) -> None:
+    """Below 1,000 items a collection's index exists only in Chroma's in-process cache,
+    and chromadb 1.5.9 fails every read of it ("Nothing found on disk") once that cache
+    evicts it. With Windows' default limits, about one index fits per cache shard, so
+    40 collections always collided; get_chroma_client makes room first."""
+    from quietpost.memory.chroma import get_chroma_client
+
+    client = get_chroma_client(tmp_path / "chroma")
+    collections = [client.get_or_create_collection(f"col{i}") for i in range(40)]
+    for i, collection in enumerate(collections):
+        collection.upsert(ids=["a"], embeddings=[[float(i), 1.0, 0.0]], documents=["x"])
+    for _ in range(2):
+        for collection in collections:
+            assert collection.query(query_embeddings=[[1.0, 1.0, 0.0]], n_results=1)["ids"] == [["a"]]
+
+
 @pytest.mark.asyncio
 async def test_procedural_patterns_below_relevance_are_not_returned(tmp_path: Path) -> None:
     """Only near-duplicate past tasks become planner hints."""
-    from cortex.memory.procedural import ToolPattern
+    from quietpost.memory.procedural import ToolPattern
 
     provider = _mock_provider()
     procedural = ProceduralMemory(
@@ -215,7 +231,7 @@ async def test_procedural_patterns_below_relevance_are_not_returned(tmp_path: Pa
 
 
 def _manager(tmp_path: Path, provider: OllamaProvider, semantic: SemanticMemory) -> MemoryManager:
-    episodic = EpisodicMemory(tmp_path / "cortex.db")
+    episodic = EpisodicMemory(tmp_path / "quietpost.db")
     procedural = ProceduralMemory(
         tmp_path / "procedural", "nomic-embed-text", provider, client=chromadb.EphemeralClient()
     )
@@ -248,7 +264,7 @@ async def test_recent_history_returns_dialogue_without_tool_messages(tmp_path: P
 async def test_consolidation_is_deduplicated_and_skips_trivial_turns(tmp_path: Path) -> None:
     """Re-learning a fact upserts it; greetings are not consolidated at all."""
     provider = _mock_provider()
-    episodic = EpisodicMemory(tmp_path / "cortex.db")
+    episodic = EpisodicMemory(tmp_path / "quietpost.db")
     await episodic.initialize()
     semantic = SemanticMemory(
         tmp_path / "chroma",
@@ -264,7 +280,7 @@ async def test_consolidation_is_deduplicated_and_skips_trivial_turns(tmp_path: P
 
     await episodic.store(
         _entry(
-            "I prefer local AI for privacy, and my project is named CORTEX.",
+            "I prefer local AI for privacy, and my project is named Quietpost.",
             "episodic",
             session_id="s1",
             role="user",
@@ -294,7 +310,7 @@ async def test_end_session_consolidates_in_background(tmp_path: Path) -> None:
     consolidate.assert_awaited_once_with("s1", "I prefer local AI.")
 
 
-_STATEMENT = "I prefer local-only AI, and my project is named CORTEX."
+_STATEMENT = "I prefer local-only AI, and my project is named Quietpost."
 
 
 @pytest.mark.asyncio
@@ -358,14 +374,14 @@ async def test_a_new_session_waits_for_facts_still_being_learned(tmp_path: Path)
 
 def test_consolidation_keeps_only_durable_user_facts() -> None:
     """Request logs, absences and facts about other things are not stored."""
-    from cortex.memory.semantic import _is_durable_user_fact
+    from quietpost.memory.semantic import _is_durable_user_fact
 
     assert _is_durable_user_fact("The user's name is Roydon.")
     assert _is_durable_user_fact("The user asked to be called Captain.")
     assert not _is_durable_user_fact("The user requested the 15th Fibonacci number, which is 377.")
     assert not _is_durable_user_fact("The user asked for a snake game.")
     assert not _is_durable_user_fact("The user's name is not mentioned.")
-    assert not _is_durable_user_fact("CORTEX has episodic memory stored in SQLite.")
+    assert not _is_durable_user_fact("Quietpost has episodic memory stored in SQLite.")
 
 
 @pytest.mark.parametrize(
@@ -393,7 +409,7 @@ def test_only_the_users_own_words_about_themselves_are_read(
     """Facts come from what the user says about themselves, never from material they
     hand over: quoted or pasted text, what follows "summarize this" or a colon, and
     "my document says ..." are data (#54)."""
-    from cortex.memory.semantic import self_statements
+    from quietpost.memory.semantic import self_statements
 
     assert self_statements(message) == statements
 
@@ -414,7 +430,7 @@ def test_only_the_users_own_words_about_themselves_are_read(
 def test_facts_must_be_backed_by_the_users_words(fact: str, evidence: str, grounded: bool) -> None:
     """Whatever the model extracts, a fact's names, places and numbers (or, with none,
     most of its words) must appear in what the user said about themselves."""
-    from cortex.memory.semantic import _is_grounded
+    from quietpost.memory.semantic import _is_grounded
 
     assert _is_grounded(fact, evidence) is grounded
 
@@ -445,7 +461,7 @@ def _extracting(*facts: str) -> OllamaProvider:
 
 
 async def _stored_after(tmp_path: Path, provider: OllamaProvider, user: str, assistant: str) -> list[str]:
-    episodic = EpisodicMemory(tmp_path / "cortex.db")
+    episodic = EpisodicMemory(tmp_path / "quietpost.db")
     await episodic.initialize()
     await episodic.store(_entry(user, "episodic", session_id="s", role="user"))
     await episodic.store(_entry(assistant, "episodic", session_id="s", role="assistant"))
@@ -529,7 +545,7 @@ async def test_mixed_turn_remembers_only_what_the_user_said_about_themselves(
 async def test_what_the_user_says_about_themselves_is_remembered(
     tmp_path: Path, user: str, extracted: list[str]
 ) -> None:
-    """Positive controls: the fix must not stop CORTEX learning real facts and preferences."""
+    """Positive controls: the fix must not stop Quietpost learning real facts and preferences."""
     stored = await _stored_after(tmp_path, _extracting(*extracted), user, "Noted.")
     assert sorted(stored) == sorted(extracted)
 
@@ -538,7 +554,7 @@ async def test_what_the_user_says_about_themselves_is_remembered(
 async def test_consolidation_skips_turns_without_self_statements(tmp_path: Path) -> None:
     """No model call when the latest user turn says nothing about the user."""
     provider = _mock_provider()
-    episodic = EpisodicMemory(tmp_path / "cortex.db")
+    episodic = EpisodicMemory(tmp_path / "quietpost.db")
     await episodic.initialize()
     semantic = SemanticMemory(
         tmp_path / "chroma",

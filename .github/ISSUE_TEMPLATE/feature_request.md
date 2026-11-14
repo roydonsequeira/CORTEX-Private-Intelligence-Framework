@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest an improvement for CORTEX
+about: Suggest an improvement for Quietpost
 title: "[Feature]: "
 labels: enhancement
 assignees: ""
@@ -12,7 +12,7 @@ What user or developer problem should this solve?
 
 ## Proposal
 
-What should CORTEX do?
+What should Quietpost do?
 
 ## Local-First Considerations
 

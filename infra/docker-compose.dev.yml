@@ -1,13 +1,13 @@
 services:
-  cortex-api:
+  quietpost-api:
     volumes:
       - ../src:/app/src
     environment:
-      - CORTEX_LOG_LEVEL=DEBUG
+      - QUIETPOST_LOG_LEVEL=DEBUG
     command:
       [
         "uvicorn",
-        "cortex.api.server:create_app",
+        "quietpost.api.server:create_app",
         "--factory",
         "--host",
         "0.0.0.0",

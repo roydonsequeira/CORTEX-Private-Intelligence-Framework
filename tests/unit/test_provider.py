@@ -1,15 +1,23 @@
 """Unit tests for OllamaProvider — all network calls are mocked."""
 
 import json
-from collections.abc import AsyncIterator
+import re
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-from cortex.exceptions import CortexModelError
-from cortex.models.provider import Message, ModelResponse, OllamaProvider, ToolCall
+from quietpost.exceptions import QuietpostModelError
+from quietpost.models.provider import (
+    GenerationConfig,
+    Message,
+    ModelResponse,
+    OllamaProvider,
+    ToolCall,
+)
+from tests.unit._fake_ollama import OLLAMA_COM, FakeOllama
 
 
 class _FakeStreamResponse:
@@ -78,15 +86,15 @@ async def test_complete_returns_model_response(provider: OllamaProvider) -> None
 
 
 @pytest.mark.asyncio
-async def test_complete_raises_cortex_model_error_on_http_failure(
+async def test_complete_raises_quietpost_model_error_on_http_failure(
     provider: OllamaProvider,
 ) -> None:
-    """complete() wraps httpx.HTTPError in CortexModelError."""
+    """complete() wraps httpx.HTTPError in QuietpostModelError."""
     with patch.object(
         provider._client,
         "post",
         new=AsyncMock(side_effect=httpx.ConnectError("connection refused")),
-    ), pytest.raises(CortexModelError):
+    ), pytest.raises(QuietpostModelError):
         await provider.complete(
             model="llama3.1:8b",
             messages=[Message(role="user", content="Hi")],
@@ -322,6 +330,77 @@ async def test_payload_pins_context_window_and_keep_alive() -> None:
     assert payload["keep_alive"] == "30m"
 
 
+@pytest.mark.asyncio
+async def test_complete_returns_tool_calls(provider: OllamaProvider) -> None:
+    """Tool calls are on the response itself, in the shape every provider uses."""
+    call = {"function": {"name": "calculator", "arguments": {"expression": "2+2"}}}
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {
+        "model": "qwen2.5:7b",
+        "message": {"role": "assistant", "content": "", "tool_calls": [call]},
+    }
+
+    with patch.object(provider._client, "post", new=AsyncMock(return_value=mock_resp)):
+        result = await provider.complete("qwen2.5:7b", [Message(role="user", content="2+2?")])
+
+    assert result.tool_calls == [call]
+
+
+@pytest.mark.asyncio
+async def test_json_schema_is_sent_as_ollama_format(provider: OllamaProvider) -> None:
+    schema = {"type": "object", "properties": {"amount": {"type": "number"}}}
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = _make_chat_response('{"amount": 1}')
+    post_mock = AsyncMock(return_value=mock_resp)
+
+    with patch.object(provider._client, "post", new=post_mock):
+        await provider.complete(
+            "qwen2.5:7b", [Message(role="user", content="x")], GenerationConfig(json_schema=schema)
+        )
+
+    assert post_mock.await_args is not None
+    assert post_mock.await_args.kwargs["json"]["format"] == schema
+
+
+@pytest.mark.asyncio
+async def test_think_is_sent_only_when_set() -> None:
+    """Thinking models reason before every answer unless the request says think: false."""
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = _make_chat_response("ok")
+    payloads = []
+    for think in (False, None):
+        provider = OllamaProvider("http://fake-ollama:11434", think=think)
+        post_mock = AsyncMock(return_value=mock_resp)
+        with patch.object(provider._client, "post", new=post_mock):
+            await provider.complete("qwen3:8b", [Message(role="user", content="Hi")])
+        assert post_mock.await_args is not None
+        payloads.append(post_mock.await_args.kwargs["json"])
+
+    assert payloads[0]["think"] is False
+    assert "think" not in payloads[1]
+
+
+@pytest.mark.asyncio
+async def test_the_factory_turns_thinking_off_by_default() -> None:
+    from quietpost.config.settings import Settings
+    from quietpost.models.factory import create_provider
+
+    provider = await create_provider(Settings())
+    try:
+        assert isinstance(provider, OllamaProvider)
+        assert provider._think is False
+    finally:
+        await provider.aclose()
+
+
+def test_model_requests_ignore_proxy_environment_variables() -> None:
+    """Prompts go straight to Ollama, never through an HTTP(S)_PROXY from the environment."""
+    assert OllamaProvider("http://127.0.0.1:11434")._client.trust_env is False
+
+
 def test_message_serialises_tool_calls_for_ollama() -> None:
     """Assistant tool calls and tool replies use Ollama's message shape."""
     call = Message(
@@ -348,7 +427,7 @@ async def test_missing_model_error_says_how_to_fix(provider: OllamaProvider) -> 
     mock_resp = MagicMock(spec=httpx.Response)
     mock_resp.raise_for_status = MagicMock(side_effect=error)
 
-    with patch.object(provider._client, "post", new=AsyncMock(return_value=mock_resp)),             pytest.raises(CortexModelError, match="ollama pull qwen2.5:7b"):
+    with patch.object(provider._client, "post", new=AsyncMock(return_value=mock_resp)),             pytest.raises(QuietpostModelError, match="ollama pull qwen2.5:7b"):
         await provider.complete("qwen2.5:7b", [Message(role="user", content="Hi")])
 
 
@@ -357,7 +436,7 @@ async def test_unreachable_ollama_error_says_how_to_fix(provider: OllamaProvider
     """A connection failure names the URL and how to start Ollama."""
     with patch.object(
         provider._client, "post", new=AsyncMock(side_effect=httpx.ConnectError("refused"))
-    ), pytest.raises(CortexModelError, match="ollama serve"):
+    ), pytest.raises(QuietpostModelError, match="ollama serve"):
         await provider.complete("qwen2.5:7b", [Message(role="user", content="Hi")])
 
 
@@ -367,8 +446,153 @@ async def test_stream_error_line_raises(provider: OllamaProvider) -> None:
     lines = [json.dumps({"error": "out of memory"})]
     with patch.object(
         provider._client, "stream", MagicMock(return_value=_FakeStreamContext(lines))
-    ), pytest.raises(CortexModelError, match="out of memory"):
+    ), pytest.raises(QuietpostModelError, match="out of memory"):
         async for _ in provider.stream_complete(
             model="qwen2.5:7b", messages=[Message(role="user", content="Hi")]
         ):
             pass
+
+
+# Models a local Ollama passes on to another computer (models/endpoints.py).
+
+_EMAIL = [Message(role="user", content="Summarise this email from my bank")]
+
+
+def _local_only(transport: httpx.AsyncBaseTransport) -> OllamaProvider:
+    """The client models/factory.py builds."""
+    return OllamaProvider("http://127.0.0.1:11434", local_only=True, transport=transport)
+
+
+def _every_request(provider: OllamaProvider, model: str) -> list[Callable[[], Awaitable[Any]]]:
+    """Each way the provider sends something to a model."""
+
+    async def stream() -> None:
+        async for _chunk in provider.stream_complete(model, _EMAIL):
+            pass
+
+    return [
+        lambda: provider.complete(model, _EMAIL),
+        stream,
+        lambda: provider.embed(model, "Summarise this email from my bank"),
+        lambda: provider.warmup(model),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["gpt-oss:120b-cloud", "gemma4:cloud"])
+async def test_a_cloud_model_is_refused_without_a_single_request(model: str) -> None:
+    """Asking Ollama about a cloud model's name would itself reach ollama.com."""
+    fake = FakeOllama({model: OLLAMA_COM})
+    provider = _local_only(fake.transport())
+
+    for request in _every_request(provider, model):
+        with pytest.raises(QuietpostModelError) as refused:
+            await request()
+        assert str(refused.value).startswith(
+            f"Ollama passes {model} on to ollama.com instead of running it on this computer"
+        )
+        assert "Quietpost sent it nothing" in str(refused.value)
+    assert fake.requests == []
+
+
+@pytest.mark.asyncio
+async def test_a_model_ollama_passes_on_is_refused_before_anything_is_sent_to_it() -> None:
+    """A cloud model copied under another name keeps running on ollama.com."""
+    fake = FakeOllama({"my-assistant": OLLAMA_COM})
+    provider = _local_only(fake.transport())
+
+    for request in _every_request(provider, "my-assistant"):
+        with pytest.raises(QuietpostModelError, match=re.escape(f"on to {OLLAMA_COM} instead")):
+            await request()
+    assert fake.requests == [("/api/show", "my-assistant")] * 4
+
+
+@pytest.mark.asyncio
+async def test_a_model_that_runs_here_is_asked_about_once() -> None:
+    fake = FakeOllama({"qwen2.5:7b": None, "nomic-embed-text:latest": None})
+    provider = _local_only(fake.transport())
+
+    for request in _every_request(provider, "qwen2.5:7b")[:2] * 2:
+        await request()
+    await provider.embed("nomic-embed-text", ["one", "two"])
+
+    assert fake.requests == [
+        ("/api/show", "qwen2.5:7b"),
+        *[("/api/chat", "qwen2.5:7b")] * 4,
+        ("/api/show", "nomic-embed-text"),
+        ("/api/embed", "nomic-embed-text"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_missing_model_says_how_to_get_it_and_works_once_downloaded() -> None:
+    fake = FakeOllama({})
+    provider = _local_only(fake.transport())
+
+    with pytest.raises(QuietpostModelError, match="Run: ollama pull qwen2.5:7b"):
+        await provider.warmup("qwen2.5:7b")
+    fake.models["qwen2.5:7b"] = None  # downloaded while Quietpost runs
+    await provider.warmup("qwen2.5:7b")
+
+    assert fake.paths() == ["/api/show", "/api/show", "/api/generate"]
+
+
+@pytest.mark.asyncio
+async def test_a_model_ollama_will_not_describe_is_refused_with_its_reason() -> None:
+    """With its cloud switched off, Ollama won't say where a cloud-backed model runs."""
+    fake = FakeOllama({"my-assistant": OLLAMA_COM}, cloud_off=True)
+    provider = _local_only(fake.transport())
+
+    with pytest.raises(QuietpostModelError, match="HTTP 403 .*ollama cloud is disabled"):
+        await provider.complete("my-assistant", _EMAIL)
+    assert fake.paths() == ["/api/show"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [b"not json", b'["my-assistant"]'])
+async def test_an_unreadable_reply_about_a_model_refuses_it(body: bytes) -> None:
+    provider = _local_only(httpx.MockTransport(lambda request: httpx.Response(200, content=body)))
+
+    with pytest.raises(QuietpostModelError, match="unreadable reply about 'my-assistant'"):
+        await provider.complete("my-assistant", _EMAIL)
+
+
+@pytest.mark.asyncio
+async def test_without_local_only_nothing_is_asked_first() -> None:
+    fake = FakeOllama({"qwen2.5:7b": None})
+    provider = OllamaProvider("http://127.0.0.1:11434", transport=fake.transport())
+
+    await provider.complete("qwen2.5:7b", _EMAIL)
+
+    assert fake.paths() == ["/api/chat"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cloud_off", [True, False, None])
+async def test_cloud_switched_off_reads_ollamas_switch(cloud_off: bool | None) -> None:
+    fake = FakeOllama({}, cloud_off=cloud_off)
+    provider = OllamaProvider("http://127.0.0.1:11434", transport=fake.transport())
+
+    assert await provider.cloud_switched_off() is cloud_off
+    assert fake.paths() == ["/api/status"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body", [b"not json", b"[]", b'{"cloud": "off"}', b'{"cloud": {"disabled": "true"}}']
+)
+async def test_an_odd_status_reply_leaves_the_cloud_switch_unknown(body: bytes) -> None:
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, content=body))
+    provider = OllamaProvider("http://127.0.0.1:11434", transport=transport)
+
+    assert await provider.cloud_switched_off() is None
+
+
+@pytest.mark.asyncio
+async def test_the_cloud_switch_is_unknown_when_ollama_does_not_answer() -> None:
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    provider = OllamaProvider("http://127.0.0.1:11434", transport=httpx.MockTransport(refuse))
+
+    assert await provider.cloud_switched_off() is None

@@ -1,11 +1,12 @@
 [build-system]
-requires = ["setuptools>=84.2.1", "wheel"]
+# setuptools builds wheels itself since 70.1, so the `wheel` package isn't needed.
+requires = ["setuptools>=84.2.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cortex-agent"
-version = "1.2.3"
-description = "CORTEX — Private Intelligence Framework. A fully local, privacy-first AI agent."
+name = "quietpost"
+version = "2.0.0.dev0"
+description = "A private AI chief of staff for your inbox, running on your own machine with local models."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -41,6 +42,7 @@ dependencies = [
     "html2text>=2025.4.15",
     "jsonschema>=4.26.0,<5.0",
     "truststore>=0.10.5",
+    "platformdirs>=4.12,<5.0",
 ]
 
 [project.urls]
@@ -50,7 +52,7 @@ Issues = "https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framewor
 Changelog = "https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/blob/main/CHANGELOG.md"
 
 [project.scripts]
-cortex = "cortex.cli:main"
+quietpost = "quietpost.cli:main"
 
 [project.optional-dependencies]
 container = [
@@ -68,6 +70,10 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# The bundled UI (`npm run build:bundle` in ui/), served by the API itself.
+[tool.setuptools.package-data]
+quietpost = ["web/**/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

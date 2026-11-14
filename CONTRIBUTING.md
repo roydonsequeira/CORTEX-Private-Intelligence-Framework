@@ -1,6 +1,6 @@
-# Contributing to CORTEX
+# Contributing to Quietpost
 
-Thanks for helping improve CORTEX. This project aims to be a reference implementation for local, private AI agents, so contributions should be typed, tested, observable, and easy to review.
+Thanks for helping improve Quietpost. This project aims to be a reference implementation for local, private AI agents, so contributions should be typed, tested, observable, and easy to review.
 
 ## Development Setup
 
@@ -13,8 +13,8 @@ pip install -e ".[dev]"
 pip install pre-commit && pre-commit install   # optional: ruff and mypy on commit
 
 ollama pull qwen2.5:7b && ollama pull nomic-embed-text
-cortex doctor                        # verify the setup
-cortex serve                         # API on http://localhost:8000
+quietpost doctor                        # verify the setup
+quietpost serve                         # API on http://localhost:8000
 cd ui && npm install && npm run dev  # UI on http://localhost:3000
 ```
 
@@ -24,7 +24,10 @@ tests against a real model are opt-in: `pytest -m ollama`.
 ## Code Style
 
 - Python code must pass `ruff` and `mypy` with no exceptions.
-- TypeScript code must pass `npm run lint`, `npm run typecheck`, and `npm run build`.
+- TypeScript code must pass `npm run lint`, `npm run typecheck`, `npm run build`, and
+  `npm run build:bundle`. The last one builds the static UI that ships inside the
+  Python package (into `src/quietpost/web/`), so it fails on anything that needs
+  a Node.js server at run time.
 - Keep modules focused. Prefer existing local abstractions over new framework layers.
 - Avoid cloud dependencies and API-key assumptions unless the feature is explicitly optional.
 
@@ -40,21 +43,23 @@ Run before opening a PR:
 
 ```bash
 python -m pytest tests/ -v
-python -m ruff check src tests
-python -m mypy src tests
-cd ui && npm run lint && npm run typecheck && npm run build
+python -m ruff check src tests scripts
+python -m mypy src tests scripts
+cd ui && npm run lint && npm run typecheck && npm run build && npm run build:bundle
 ```
 
 ## Tool Plugins
 
-Tool plugins live under `src/cortex/tools/plugins/`. A plugin should:
+Plugins that ship with Quietpost live under `src/quietpost/tools/plugins/` and load
+on every start. A user's own plugins go in the folder set by `plugins_dir`. A plugin
+should:
 
 - Inherit from `BaseTool`.
 - Define a `ToolSchema` with a JSON Schema `parameters` object.
 - Return `ToolResult` from `execute()`.
 - Avoid unsafe file, network, subprocess, or eval behavior unless intentionally sandboxed.
 
-See `src/cortex/tools/plugins/README.md` and `calculator.py` for examples.
+See `src/quietpost/tools/plugins/README.md` and `calculator.py` for examples.
 
 ## Architecture Decisions
 
@@ -68,6 +73,11 @@ Before proposing major changes, read:
 - ADR-004: Why LATS
 
 New architectural changes should include a short ADR using Context, Decision, and Consequences.
+
+## Releases
+
+A maintainer releases by pushing a version tag; CI builds, checks and publishes
+the package. [RELEASING.md](RELEASING.md) has the steps.
 
 ## Pull Requests
 

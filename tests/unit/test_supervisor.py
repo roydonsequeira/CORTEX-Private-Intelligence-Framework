@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from cortex.agent.kernel import AgentKernel, AgentState
-from cortex.agent.supervisor import SupervisorAgent
-from cortex.models.provider import ModelResponse
-from cortex.models.router import ModelRouter
+from quietpost.agent.kernel import AgentKernel, AgentState
+from quietpost.agent.supervisor import SupervisorAgent
+from quietpost.models.provider import ModelResponse
+from quietpost.models.router import ModelRouter
 
 
 def _response(content: str) -> ModelResponse:

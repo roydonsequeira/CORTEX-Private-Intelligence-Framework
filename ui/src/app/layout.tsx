@@ -3,8 +3,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "CORTEX — Local Agent",
-  description: "Private Intelligence Framework — intelligence that stays yours."
+  title: "Quietpost",
+  description: "A private AI chief of staff that runs on your own machine."
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

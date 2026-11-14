@@ -158,7 +158,7 @@ CASES = [
         "id": "15 rag",
         "turns": [
             {
-                "p": "Index README.md and tell me which memory tiers CORTEX has",
+                "p": "Index README.md and tell me which memory tiers Quietpost has",
                 "req": ["episodic", "semantic"],
                 "tools": ["doc_search"],
                 "maxs": 60,

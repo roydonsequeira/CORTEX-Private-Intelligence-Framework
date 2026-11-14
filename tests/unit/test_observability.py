@@ -2,7 +2,7 @@
 
 import pytest
 
-from cortex.observability import tracing
+from quietpost.observability import tracing
 
 
 class _StubProcessor:
