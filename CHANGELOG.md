@@ -150,6 +150,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **"Write code and run it" now runs it.** qwen3:8b could plan this as a written
   answer, with no tools, and list output that nothing had produced. A request that
   says "and run it" now always gets a Python step.
+- **The README's install command for the container sandbox pointed at someone
+  else's package.** `pip install 'cortex-agent[container]'` installs an
+  unrelated project that uses that name on PyPI. The command is now
+  `pip install -e '.[container]'`, run from the clone.
+- The README said the outside security review raised four issues. It filed
+  five (#54–#58), and all five are fixed.
 
 ## [1.2.3] - 2026-10-25
 
