@@ -213,7 +213,10 @@ class Settings(BaseSettings):
     # POST /tools/{name}/execute runs a tool directly, bypassing the agent. Debug only.
     debug_tool_endpoint: bool = False
     log_level: str = "INFO"
-    telemetry_enabled: bool = True
+    # OpenTelemetry export to otel_endpoint. Off unless set: with no collector
+    # running, each export fails and logs an error. The Docker stack turns it on
+    # for its Jaeger.
+    telemetry_enabled: bool = False
     otel_endpoint: str = "http://localhost:4317"
     max_agent_steps: int = 10
     # Wall-clock budget for one ReAct run; past it, a best-effort answer is given.

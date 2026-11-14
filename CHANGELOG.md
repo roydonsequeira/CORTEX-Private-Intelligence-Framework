@@ -110,6 +110,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `plugin_tool_name_taken` warning. An empty `plugins_dir` means no folder. It
   used to mean the current folder, so every `.py` file there ran on start.
 
+- **Tracing is off by default.** `telemetry_enabled` now defaults to `false`.
+  Without a config file that turned it off, Quietpost exported traces to
+  `localhost:4317` and logged export errors when no collector was running. The
+  Docker stacks still turn it on for their Jaeger.
+- **`quietpost doctor` checks HTTPS only with `--online`.** The check connects to
+  example.com, the one connection `doctor` made beyond this computer and the
+  local network. Without the flag it says the check was skipped.
+- **`quietpost serve` won't make a first start without a config.** With no config
+  file, no `QUIETPOST_*` settings and no stored memory, it stops and says to run
+  `quietpost init`, or to create an empty `quietpost.yaml` to keep memory and the
+  workspace in the start folder. The defaults put both under whichever folder
+  `serve` was started in, and a later `quietpost init` pointed at new, empty
+  folders, so the memory seemed lost. A setup that `QUIETPOST_*` variables
+  configure, or that has memory where the defaults point (as a 1.x install can),
+  starts as before, with a warning that names both folders. `quietpost doctor`
+  reports the same, and in the first case doesn't create the folders.
+
 ### Fixed
 
 - **The calculator loads in every install.** Plugins were read only from
@@ -156,6 +173,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `pip install -e '.[container]'`, run from the clone.
 - The README said the outside security review raised four issues. It filed
   five (#54–#58), and all five are fixed.
+- **A `QUIETPOST_CONFIG` that names a missing file is an error.** `quietpost
+  serve` used the defaults without saying so, and `quietpost doctor` said no
+  `quietpost.yaml` was found. Both now name the variable and the file. The same
+  goes for `CORTEX_CONFIG`.
 
 ## [1.2.3] - 2026-10-25
 

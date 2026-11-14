@@ -2,7 +2,8 @@
 
     quietpost init           set up models, settings and folders (asks before downloading)
     quietpost serve          start the API (uvicorn) with the settings from quietpost.yaml
-    quietpost doctor         check Python, config, the model server, models, ports, and HTTPS
+    quietpost doctor         check Python, config, the model server, models and ports
+                             (--online: HTTPS too, which connects to example.com)
     quietpost reset-memory   wipe stored memory (asks for --yes)
 
 Because this runs inside the interpreter Quietpost is installed in, it cannot pick
@@ -25,6 +26,10 @@ if TYPE_CHECKING:
 _OK = "[ ok ]"
 _WARN = "[warn]"
 _FAIL = "[FAIL]"
+_SKIP = "[skip]"
+# The one check that leaves this computer, so doctor runs it only with --online.
+_HTTPS_CHECK_URL = "https://example.com"
+_CONFIG_VARIABLES = ("QUIETPOST_CONFIG", "CORTEX_CONFIG")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -69,7 +74,12 @@ def main(argv: list[str] | None = None) -> int:
     init.add_argument("--yes", action="store_true", help="accept every suggestion without asking")
     init.add_argument("--force", action="store_true", help="replace an existing config")
 
-    sub.add_parser("doctor", help="diagnose the local setup")
+    doctor_parser = sub.add_parser("doctor", help="diagnose the local setup")
+    doctor_parser.add_argument(
+        "--online",
+        action="store_true",
+        help=f"also check HTTPS for web_fetch, by connecting to {_HTTPS_CHECK_URL}",
+    )
 
     reset = sub.add_parser(
         "reset-memory", help="delete all stored memory (episodic, semantic, procedural)"
@@ -95,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
     if args.command == "doctor":
-        return doctor()
+        return doctor(online=args.online)
     if args.command == "reset-memory":
         return _reset_memory(args.yes)
     parser.print_help()
@@ -109,7 +119,17 @@ def _serve(host: str | None, port: int | None, reload: bool) -> int:
     from quietpost.config import get_settings
     from quietpost.exceptions import QuietpostConfigError
 
+    bad_config_file = _missing_config_file()
+    if bad_config_file:
+        print(f"{_FAIL} {bad_config_file}")
+        return 1
     settings = get_settings()
+    no_config = _no_config(settings)
+    if no_config:
+        level, lines = no_config
+        print(f"{level} " + "\n       ".join(lines))
+        if level == _FAIL:
+            return 1
     bind_host = host or settings.api_host
     bind_port = port or settings.api_port
     try:
@@ -148,6 +168,65 @@ def _serve(host: str | None, port: int | None, reload: bool) -> int:
     return 0
 
 
+def _missing_config_file() -> str | None:
+    """Say so when QUIETPOST_CONFIG (or CORTEX_CONFIG) names a file that doesn't exist.
+
+    Without this check the defaults apply silently, which hides a typo in the path.
+    """
+    for variable in _CONFIG_VARIABLES:
+        value = os.environ.get(variable)
+        if value:
+            return None if Path(value).is_file() else f"{variable} names {value}, which doesn't exist."
+    return None
+
+
+def _no_config(settings: "Settings") -> tuple[str, list[str]] | None:
+    """What to say when no config file is read: (_FAIL or _WARN, lines), or None.
+
+    The defaults keep memory and the workspace under the folder Quietpost was
+    started in, so a first start without a config would leave them there, and a
+    later `quietpost init` would point at new, empty folders. A first start is
+    therefore refused with how to set up. A setup that QUIETPOST_* (or CORTEX_*)
+    variables configure, or that already has memory where the defaults point, as
+    a 1.x install can, starts as before; nothing is moved.
+    """
+    from quietpost.config.settings import _resolve_config_path, user_config_file
+
+    if _resolve_config_path() is not None:
+        return None
+    looked = f"no quietpost.yaml in {Path.cwd()} or above it, or in {user_config_file().parent}"
+    if _configured_by_environment() or _has_memory(settings):
+        return _WARN, [
+            f"No config file ({looked}), so the defaults and any QUIETPOST_* settings apply.",
+            f"Memory: {settings.db_path.parent.resolve()}",
+            f"Workspace: {settings.allowed_root.resolve()}",
+        ]
+    return _FAIL, [
+        f"No config found: {looked}.",
+        "Run `quietpost init` first. It picks the models and keeps memory in your user data",
+        "folder, whichever folder you start Quietpost in. To keep memory and the workspace",
+        "in this folder instead, create an empty quietpost.yaml here.",
+    ]
+
+
+def _has_memory(settings: "Settings") -> bool:
+    """Whether memory is stored where the settings point (empty folders don't count)."""
+    chroma = settings.chroma_path
+    return settings.db_path.is_file() or (chroma.is_dir() and any(chroma.iterdir()))
+
+
+def _configured_by_environment() -> bool:
+    """Whether a QUIETPOST_* variable, or a CORTEX_* one from 1.x, sets a setting."""
+    from quietpost.config.settings import Settings
+
+    names = {
+        f"{prefix}{name}".upper()
+        for prefix in ("QUIETPOST_", "CORTEX_")
+        for name in Settings.model_fields
+    }
+    return any(variable.upper() in names for variable in os.environ)
+
+
 async def _check_model_server(settings: "Settings") -> None:
     """Refuse a model server or a model that isn't on this computer or the local network.
 
@@ -165,11 +244,15 @@ async def _check_model_server(settings: "Settings") -> None:
         await provider.aclose()
 
 
-def doctor() -> int:
-    """Print a checklist of everything Quietpost needs; return non-zero on failures."""
+def doctor(online: bool = False) -> int:
+    """Print a checklist of everything Quietpost needs; return non-zero on failures.
+
+    Every check stays on this computer and the local network unless ``online`` is
+    set, which adds the HTTPS check against example.com.
+    """
     import httpx
 
-    from quietpost.config.settings import Settings, _resolve_config_path, user_config_file
+    from quietpost.config.settings import Settings, _resolve_config_path
     from quietpost.exceptions import QuietpostConfigError, QuietpostModelError
 
     failures = 0
@@ -177,19 +260,24 @@ def doctor() -> int:
 
     print(f"{_OK} Python {sys.version.split()[0]} at {sys.executable}")
 
+    bad_config_file = _missing_config_file()
+    if bad_config_file:
+        print(f"{_FAIL} {bad_config_file}")
+        return 1
     config_path = _resolve_config_path()
     if config_path:
         print(f"{_OK} Config: {config_path}")
-    else:
-        print(
-            f"{_WARN} No quietpost.yaml found from {Path.cwd()} upward or in "
-            f"{user_config_file().parent} — using defaults"
-        )
     try:
         settings = Settings()
     except Exception as exc:
         print(f"{_FAIL} Config could not be loaded: {exc}")
         return 1
+    no_config = _no_config(settings)
+    if no_config:
+        level, lines = no_config
+        print(f"{level} " + "\n       ".join(lines))
+        if level == _FAIL:
+            failures += 1
 
     from quietpost.api.server import missing_model_fix, missing_models, start_server_fix
     from quietpost.models.endpoints import model_refusal
@@ -246,11 +334,16 @@ def doctor() -> int:
     if settings.model_server == "ollama":
         _print_cloud_switch(report.cloud_off)
 
-    for label, path in (
+    folders: tuple[tuple[str, Path], ...] = (
         ("episodic db", settings.db_path.parent),
         ("chroma", settings.chroma_path),
         ("workspace (the agent's files)", settings.allowed_root),
-    ):
+    )
+    if no_config and no_config[0] == _FAIL:
+        # The check creates the folders, and then they would be in the start folder.
+        print(f"{_SKIP} Folders: not checked until there's a config, so none is created here.")
+        folders = ()
+    for label, path in folders:
         try:
             path.mkdir(parents=True, exist_ok=True)
             probe = path / ".quietpost-write-test"
@@ -266,13 +359,17 @@ def doctor() -> int:
     else:
         print(f"{_WARN} API port {settings.api_port} is in use (Quietpost may already be running)")
 
-    try:
-        from quietpost.tools.builtin.web_fetch import _ssl_context
+    if online:
+        try:
+            from quietpost.tools.builtin.web_fetch import _ssl_context
 
-        httpx.get("https://example.com", timeout=8.0, verify=_ssl_context())
-        print(f"{_OK} HTTPS works (web_fetch)")
-    except Exception as exc:
-        print(f"{_WARN} HTTPS check failed — web_fetch will be unavailable: {exc}")
+            httpx.get(_HTTPS_CHECK_URL, timeout=8.0, verify=_ssl_context())
+            print(f"{_OK} HTTPS works for web_fetch (connected to {_HTTPS_CHECK_URL})")
+        except Exception as exc:
+            print(f"{_WARN} HTTPS check against {_HTTPS_CHECK_URL} failed, so web_fetch won't work: {exc}")
+    else:
+        print(f"{_SKIP} HTTPS for web_fetch: not checked, because the check connects to example.com.")
+        print("       Run `quietpost doctor --online` to include it.")
 
     print()
     if failures:

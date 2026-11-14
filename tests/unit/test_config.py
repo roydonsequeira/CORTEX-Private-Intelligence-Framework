@@ -18,6 +18,18 @@ def test_settings_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     assert s.model_url == "http://localhost:11434"
     assert s.api_port == 8000
     assert s.log_level == "INFO"
+    assert s.telemetry_enabled is False
+
+
+@pytest.mark.parametrize("compose", ["docker-compose.yml", "docker-compose.demo.yml"])
+def test_the_docker_stacks_turn_tracing_on_for_their_jaeger(compose: str) -> None:
+    """Tracing is off by default, so each stack with a Jaeger has to switch it on."""
+    infra = Path(__file__).resolve().parents[2] / "infra"
+    stack = yaml.safe_load((infra / compose).read_text(encoding="utf-8"))
+    assert "jaeger" in stack["services"]
+    api = stack["services"]["quietpost-api"]
+    assert "QUIETPOST_TELEMETRY_ENABLED=true" in api["environment"]
+    assert "QUIETPOST_OTEL_ENDPOINT=http://jaeger:4317" in api["environment"]
 
 
 def test_settings_load_from_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -72,7 +72,7 @@ flowchart TB
 - **Plugin-first tools:** drop a `BaseTool` subclass into your `plugins_dir` folder and restart.
 - **Streaming API:** Server-Sent Events for plans, steps, tool calls, tokens, and completion events.
 - **Operator UI:** terminal-inspired Next.js interface with memory search and execution trace panel.
-- **OpenTelemetry tracing (opt-in):** FastAPI, model calls, tools, memory, and agent spans exported to Jaeger — on in the Docker stack, off in the shipped `quietpost.yaml` for native runs.
+- **OpenTelemetry tracing (opt-in):** FastAPI, model calls, tools, memory, and agent spans exported to Jaeger. Off by default; the Docker stack turns it on.
 - **Release hardening:** request IDs, token bucket rate limiting, graceful shutdown, strict typing, CI.
 
 ## Quick Start
@@ -90,7 +90,7 @@ python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -e .
 
-quietpost doctor                      # checks Python, config, model server, models, port, HTTPS
+quietpost doctor                      # checks Python, config, model server, models, port (--online: HTTPS)
 quietpost serve                       # API on http://localhost:8000
 
 cd ui && npm install && npm run dev   # UI on http://localhost:3000 (second terminal)
@@ -131,7 +131,7 @@ Same URLs as above. Answers are weaker than the default 7B model — this shows 
 
 `quietpost serve` runs uvicorn inside the environment Quietpost is installed in, so it cannot pick up another Python's `uvicorn` from `PATH` (which fails with `No module named 'quietpost'`). It refuses to start on a busy port and warms the model in the background. `quietpost doctor` checks the whole setup and prints the fix for anything wrong. `quietpost reset-memory --yes` wipes stored memory for a clean start.
 
-Telemetry export is off in the default `quietpost.yaml` (no collector is running natively); the Docker stack turns it on for Jaeger. That is Quietpost's own tracing, which stays on your machine. Separately, Next.js sends anonymous usage statistics about its build tooling (never your prompts) to Vercel by default. The UI's Docker image turns this off; for native UI development, run `npx next telemetry disable` once in `ui/`.
+Telemetry export is off by default (no collector runs natively); the Docker stack turns it on for Jaeger. That is Quietpost's own tracing, which stays on your machine. Separately, Next.js sends anonymous usage statistics about its build tooling (never your prompts) to Vercel by default. The UI's Docker image turns this off; for native UI development, run `npx next telemetry disable` once in `ui/`.
 
 ## Configuration
 
@@ -164,7 +164,7 @@ All runtime configuration lives in `quietpost.yaml` and can be overridden with `
 | `debug_tool_endpoint` | `false` | Enable `POST /tools/{name}/execute`, which runs a tool directly, bypassing the agent |
 | `task_store` | `memory` | Task result backend: `memory` (lost on restart) or `sqlite` (durable) |
 | `task_db_path` | `./.quietpost/tasks.db` | SQLite path for the durable task store |
-| `telemetry_enabled` | `true` (`false` in the shipped `quietpost.yaml`) | Export OpenTelemetry traces/metrics; `false` runs without a collector and without export warnings |
+| `telemetry_enabled` | `false` | Export OpenTelemetry traces/metrics to `otel_endpoint`; the Docker stack turns it on for its Jaeger |
 | `otel_endpoint` | `http://localhost:4317` | OTLP gRPC endpoint |
 | `code_sandbox` | `restricted` | Code execution backend: `restricted` (in-process) or `container` (Docker isolation) |
 | `stream_tokens` | `true` | Stream final-answer tokens from Ollama as they generate |
@@ -278,7 +278,7 @@ Everything stays on disk under `.quietpost/`. Inspect it with `GET /memory/sessi
 
 Quietpost exports OpenTelemetry spans for HTTP requests, agent planning/execution/reflection, Ollama calls, SQLite memory, Chroma memory, tool execution, LATS, supervisor workers, and web fetches, plus metrics for model latency and agent steps. Logs are structured JSON with a request ID on every line.
 
-With the Docker stack, traces appear in Jaeger at `http://localhost:16686`. Running natively without a collector, set `telemetry_enabled: false`.
+With the Docker stack, traces appear in Jaeger at `http://localhost:16686`. To trace a native run, start a collector and set `telemetry_enabled: true`.
 
 ## API Examples
 
