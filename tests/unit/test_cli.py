@@ -169,6 +169,16 @@ def test_a_config_variable_naming_a_missing_file_is_an_error(
     assert f"[FAIL] {variable} names {missing}, which doesn't exist." in capsys.readouterr().out
 
 
+def test_version_prints_the_installed_version(capsys: pytest.CaptureFixture[str]) -> None:
+    import quietpost
+
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["--version"])
+
+    assert stopped.value.code == 0
+    assert capsys.readouterr().out == f"quietpost {quietpost.__version__}\n"
+
+
 def test_serve_says_to_open_the_ui_only_when_the_browser_can_use_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

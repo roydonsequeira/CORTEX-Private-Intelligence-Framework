@@ -5,8 +5,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quietpost"
-version = "2.0.0.dev0"
-description = "A private AI chief of staff for your inbox, running on your own machine with local models."
+version = "2.0.0a1"
+description = "A local AI agent built around the limits of 7B models, with sandboxed tools, long-term memory and a web UI."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -14,7 +14,7 @@ authors = [{ name = "Roydon Sequeira" }]
 requires-python = ">=3.12"
 keywords = ["ai-agent", "local-llm", "ollama", "rag", "react-agent", "privacy", "fastapi", "llm"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",

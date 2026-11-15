@@ -191,6 +191,34 @@ def test_declining_the_download_still_writes_the_config_and_says_how_to_get_them
     assert _folders(tmp_path).config.is_file()
 
 
+def test_the_closing_hint_names_the_port_serve_will_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The config init writes sets no port, so it is QUIETPOST_API_PORT's, else 8000."""
+    from quietpost.api import web
+
+    (tmp_path / "web").mkdir()
+    (tmp_path / "web" / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    monkeypatch.setattr(web, "WEB_DIR", tmp_path / "web")
+    _server_lists(monkeypatch, ["qwen2.5:7b", "nomic-embed-text:latest"])
+
+    default = _Session()
+    assert _run(tmp_path, default) == 0
+    assert "Next: run `quietpost serve`, then open http://localhost:8000" in default.output
+
+    monkeypatch.setenv("QUIETPOST_API_PORT", "8765")
+    moved = _Session()
+    assert _run(tmp_path, moved, force=True) == 0
+    assert "Next: run `quietpost serve`, then open http://localhost:8765" in moved.output
+    assert "8000" not in moved.output
+
+    # An invalid port is for `quietpost serve` to report; init still finishes.
+    monkeypatch.setenv("QUIETPOST_API_PORT", "not-a-port")
+    broken = _Session()
+    assert _run(tmp_path, broken, force=True) == 0
+    assert "then open http://localhost:8000" in broken.output
+
+
 def test_a_failed_download_still_writes_the_config_but_exits_with_1(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
