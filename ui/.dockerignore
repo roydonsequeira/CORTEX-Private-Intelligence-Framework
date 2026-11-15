@@ -1,8 +1,10 @@
 node_modules
 .next
+# The static UI from `npm run build:bundle`; the image builds its own server.
+out
 npm-debug.log
 Dockerfile
 .dockerignore
-.cortex
+.quietpost
 .env*
 next-env.d.ts

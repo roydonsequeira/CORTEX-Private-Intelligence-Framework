@@ -4,10 +4,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from cortex.agent.kernel import AgentState
-from cortex.agent.loop import LATSLoop, SearchNode
-from cortex.models.provider import ModelResponse
-from cortex.models.router import ModelRouter
+from quietpost.agent.kernel import AgentState
+from quietpost.agent.loop import LATSLoop, SearchNode
+from quietpost.models.provider import ModelResponse
+from quietpost.models.router import ModelRouter
 
 SearchNode.model_rebuild(_types_namespace={"AgentState": AgentState})
 

@@ -2,9 +2,9 @@
 
 import pytest
 
-from cortex.agent.planner import _tidy_steps
-from cortex.agent.runnability import cannot_run_reply, refused_user_code_reply
-from cortex.models.provider import Message
+from quietpost.agent.planner import _tidy_steps
+from quietpost.agent.runnability import cannot_run_reply, refused_user_code_reply
+from quietpost.models.provider import Message
 
 _SNAKE = """Here is a snake game:
 

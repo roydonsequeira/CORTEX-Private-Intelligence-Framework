@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pull the models CORTEX uses by default into Ollama (native or the compose stack).
+# Pull the models Quietpost uses by default into Ollama (native or the compose stack).
 set -euo pipefail
 
 OLLAMA_URL="${OLLAMA_BASE_URL:-http://localhost:11434}"

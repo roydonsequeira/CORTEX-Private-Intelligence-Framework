@@ -8,7 +8,7 @@ it, which reads like the user's own words.
 
 import pytest
 
-from cortex.agent.executor import _is_unrequested_write, instruction_text
+from quietpost.agent.executor import _is_unrequested_write, instruction_text
 from tests.security._helpers import executed_tools, model_text, model_tool_call, scripted_kernel
 
 WRITE = {"action": "write_file", "path": "hacked.txt", "content": "x"}

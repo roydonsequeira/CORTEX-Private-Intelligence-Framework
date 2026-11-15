@@ -7,8 +7,8 @@ from uuid import uuid4
 import chromadb
 import pytest
 
-from cortex.memory.base import MemoryEntry, MemoryQuery
-from cortex.memory.semantic import SemanticMemory
+from quietpost.memory.base import MemoryEntry, MemoryQuery
+from quietpost.memory.semantic import SemanticMemory
 
 
 class _EmbeddingProvider:

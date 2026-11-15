@@ -19,8 +19,8 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[dev]"
-      - run: python -m ruff check src tests
-      - run: python -m mypy src tests
+      - run: python -m ruff check src tests scripts
+      - run: python -m mypy src tests scripts
 
   test:
     runs-on: ubuntu-latest
@@ -37,7 +37,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[dev]"
-      - run: python -m pytest tests/ --cov=src/cortex --cov-report=xml
+      - run: python -m pytest tests/ --cov=src/quietpost --cov-report=xml
       - uses: codecov/codecov-action@v7
         if: matrix.python-version == '3.12'
         with:
@@ -61,10 +61,13 @@ jobs:
         run: npm run typecheck
       - working-directory: ui
         run: npm run build
+      # The static UI that ships inside the Python package.
+      - working-directory: ui
+        run: npm run build:bundle
 
   docker-build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: docker build -t cortex-api:ci .
-      - run: docker build -t cortex-ui:ci ./ui
+      - run: docker build -t quietpost-api:ci .
+      - run: docker build -t quietpost-ui:ci ./ui

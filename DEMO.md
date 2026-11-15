@@ -1,6 +1,6 @@
-# CORTEX Demo
+# Quietpost Demo
 
-These examples assume CORTEX is running, either natively (`cortex serve`) or with
+These examples assume Quietpost is running, either natively (`quietpost serve`) or with
 Docker (`make up && make pull-models`).
 
 API base URL: `http://localhost:8000`
@@ -10,7 +10,7 @@ API base URL: `http://localhost:8000`
 ```bash
 curl -s -X POST http://localhost:8000/chat/message \
   -H "Content-Type: application/json" \
-  -d '{"message":"In one sentence, what is CORTEX?","session_id":null}'
+  -d '{"message":"In one sentence, what is Quietpost?","session_id":null}'
 ```
 
 Expected shape:
@@ -19,7 +19,7 @@ Expected shape:
 {
   "session_id": "...",
   "status": "complete",
-  "final_answer": "CORTEX is a local, privacy-first AI agent framework..."
+  "final_answer": "Quietpost is a local, privacy-first AI agent framework..."
 }
 ```
 
@@ -28,7 +28,7 @@ Expected shape:
 ```bash
 curl -s -X POST http://localhost:8000/chat/message \
   -H "Content-Type: application/json" \
-  -d '{"message":"Write a file called demo.txt containing hello from CORTEX, then read it back.","session_id":null}'
+  -d '{"message":"Write a file called demo.txt containing hello from Quietpost, then read it back.","session_id":null}'
 ```
 
 The response's `tool_results` show two `filesystem` calls (a write, then a read),
@@ -46,7 +46,7 @@ curl -s -X POST http://localhost:8000/chat/message \
 Expected: a `python_exec` tool result of `6765` and a matching `final_answer`.
 
 To call a tool directly, bypassing the agent (for debugging), set
-`debug_tool_endpoint: true` in `cortex.yaml`, restart, then:
+`debug_tool_endpoint: true` in `quietpost.yaml`, restart, then:
 
 ```bash
 curl -s -X POST http://localhost:8000/tools/python_exec/execute \
@@ -59,7 +59,7 @@ curl -s -X POST http://localhost:8000/tools/python_exec/execute \
 ```bash
 curl -s -X POST http://localhost:8000/tasks \
   -H "Content-Type: application/json" \
-  -d '{"task":"Research the CORTEX architecture and summarize the memory and tool systems.","priority":"normal","orchestration":"supervisor"}'
+  -d '{"task":"Research the Quietpost architecture and summarize the memory and tool systems.","priority":"normal","orchestration":"supervisor"}'
 ```
 
 Expected shape:
@@ -99,7 +99,7 @@ Expected output includes the remembered preference in `results`.
 ```bash
 curl -N -X POST http://localhost:8000/chat/stream \
   -H "Content-Type: application/json" \
-  -d '{"message":"Explain CORTEX in three bullets.","session_id":null}'
+  -d '{"message":"Explain Quietpost in three bullets.","session_id":null}'
 ```
 
 Expected event order:

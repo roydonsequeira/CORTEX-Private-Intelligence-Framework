@@ -10,11 +10,11 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from cortex.tools.base import BaseTool, ToolResult, ToolSchema
-from cortex.tools.builtin.code_exec import CodeExecutionTool
-from cortex.tools.builtin.filesystem import FileSystemTool
-from cortex.tools.builtin.web_fetch import WebFetchTool
-from cortex.tools.registry import ToolRegistry
+from quietpost.tools.base import BaseTool, ToolResult, ToolSchema
+from quietpost.tools.builtin.code_exec import CodeExecutionTool
+from quietpost.tools.builtin.filesystem import FileSystemTool
+from quietpost.tools.builtin.web_fetch import WebFetchTool
+from quietpost.tools.registry import ToolRegistry
 
 
 def _web_tool(responses: dict[str, httpx.Response]) -> tuple[WebFetchTool, list[str]]:
@@ -158,7 +158,7 @@ def test_tool_registry_auto_discover_picks_up_plugins(tmp_path: Path) -> None:
         textwrap.dedent(
             """
             from typing import ClassVar
-            from cortex.tools.base import BaseTool, ToolResult, ToolSchema
+            from quietpost.tools.base import BaseTool, ToolResult, ToolSchema
 
             class EchoPlugin(BaseTool):
                 schema: ClassVar[ToolSchema] = ToolSchema(
@@ -184,6 +184,101 @@ def test_tool_registry_auto_discover_skips_bad_plugins(tmp_path: Path) -> None:
     registry = ToolRegistry()
     registry.auto_discover(tmp_path)
     assert registry.list_tools() == []
+
+
+def _plugin_source(name: str) -> str:
+    """A plugin file defining one tool called ``name`` that answers "plugin"."""
+    return textwrap.dedent(
+        f"""
+        from typing import ClassVar
+        from quietpost.tools.base import BaseTool, ToolResult, ToolSchema
+
+        class Plugin(BaseTool):
+            schema: ClassVar[ToolSchema] = ToolSchema(
+                name={name!r},
+                description="Test plugin.",
+                parameters={{"type": "object", "properties": {{}}, "additionalProperties": False}},
+            )
+
+            async def execute(self, **kwargs: object) -> ToolResult:
+                return ToolResult(tool_name={name!r}, success=True, output="plugin", execution_time_ms=0.0)
+        """
+    )
+
+
+def test_shipped_plugins_load_anywhere_with_an_empty_plugins_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An installed copy has no src/ folder: the calculator comes from the package.
+
+    `quietpost init` points plugins_dir at an empty folder, and the server can be
+    started from any folder; the calculator was missing in both cases.
+    """
+    from quietpost.tools.plugins.calculator import CalculatorTool
+
+    empty = tmp_path / "plugins"
+    empty.mkdir()
+    monkeypatch.chdir(empty)
+    for plugins_dir in (empty, None):
+        registry = ToolRegistry()
+        registry.load_plugins(plugins_dir)
+        assert isinstance(registry.get("calculator"), CalculatorTool)
+
+
+def test_plugins_dir_loads_after_and_never_replaces_a_tool(tmp_path: Path) -> None:
+    """A plugin can't swap out the workspace-confined filesystem tool or a shipped plugin."""
+    from quietpost.tools.plugins.calculator import CalculatorTool
+
+    plugins = tmp_path / "plugins"
+    plugins.mkdir()
+    for name in ("filesystem", "calculator", "echo_plugin"):
+        (plugins / f"my_{name}.py").write_text(_plugin_source(name))
+    builtin = FileSystemTool(allowed_root=tmp_path / "workspace")
+    registry = ToolRegistry()
+    registry.register(builtin)
+    registry.load_plugins(plugins)
+    assert registry.get("filesystem") is builtin
+    assert isinstance(registry.get("calculator"), CalculatorTool)
+    assert registry.get("echo_plugin") is not None
+    assert sorted(schema.name for schema in registry.list_tools()) == [
+        "calculator",
+        "echo_plugin",
+        "filesystem",
+    ]
+
+
+def test_plugins_dir_naming_the_shipped_folder_loads_it_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A config from a source checkout may still point plugins_dir at the shipped folder."""
+    from quietpost.tools import registry as registry_module
+
+    scanned: list[Path] = []
+    monkeypatch.setattr(ToolRegistry, "auto_discover", lambda _self, path: scanned.append(path))
+    registry = ToolRegistry()
+    registry.load_plugins(registry_module._SHIPPED_PLUGINS_DIR / ".." / "plugins")
+    assert scanned == []
+    assert registry.get("calculator") is not None
+
+
+def test_a_plugin_registers_only_the_tools_it_defines(tmp_path: Path) -> None:
+    """Importing FileSystemTool used to register a copy rooted at the current folder."""
+    (tmp_path / "helper.py").write_text(
+        "from quietpost.tools.builtin.filesystem import FileSystemTool\n"
+        + _plugin_source("echo_plugin")
+    )
+    registry = ToolRegistry()
+    registry.auto_discover(tmp_path)
+    assert [schema.name for schema in registry.list_tools()] == ["echo_plugin"]
+
+
+def test_a_broken_tool_class_does_not_drop_the_rest_of_its_plugin(tmp_path: Path) -> None:
+    """A class with no schema is skipped with a warning; the module's other tools load."""
+    broken_first = "from quietpost.tools.base import BaseTool\n\nclass Broken(BaseTool):\n    pass\n"
+    (tmp_path / "mixed.py").write_text(broken_first + _plugin_source("echo_plugin"))
+    registry = ToolRegistry()
+    registry.auto_discover(tmp_path)
+    assert [schema.name for schema in registry.list_tools()] == ["echo_plugin"]
 
 
 @pytest.mark.asyncio
@@ -216,7 +311,7 @@ async def test_filesystem_denies_system_paths(tmp_path: Path) -> None:
     for raw in ("/etc/passwd", "C:\\Windows\\win.ini", "//server/share/x.txt"):
         result = await tool.execute(action="read_file", path=raw)
         assert result.success is False, raw
-        assert "outside the CORTEX workspace" in (result.error or ""), raw
+        assert "outside the Quietpost workspace" in (result.error or ""), raw
 
 
 @pytest.mark.asyncio
@@ -261,34 +356,42 @@ async def test_filesystem_never_reads_or_lists_hidden_paths(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_filesystem_refuses_writes_into_cortex_code(tmp_path: Path) -> None:
-    """With the workspace widened over CORTEX itself, its code and plugins stay read-only."""
+async def test_filesystem_refuses_writes_into_quietpost_code(tmp_path: Path) -> None:
+    """With the workspace widened over Quietpost itself, its code and plugins stay read-only."""
     plugins = tmp_path / "plugins"
     plugins.mkdir()
     tool = FileSystemTool(allowed_root=tmp_path, protected_dirs=[plugins])
     result = await tool.execute(action="write_file", path="plugins/helper.py", content="x = 1")
     assert result.success is False
-    assert "CORTEX's own code or plugins folder" in (result.error or "")
+    assert "Quietpost's own code or plugins folder" in (result.error or "")
     assert not (plugins / "helper.py").exists()
     ok = await tool.execute(action="write_file", path="notes.py", content="x = 1")
     assert ok.success is True
 
 
 def test_filesystem_from_settings_protects_the_package_and_plugins(tmp_path: Path) -> None:
-    """from_settings protects the installed cortex package and the plugins folder."""
-    from cortex.config.settings import Settings
+    """from_settings protects the installed quietpost package and the plugins folder."""
+    from quietpost.config.settings import Settings
 
     settings = Settings(allowed_root=tmp_path, plugins_dir=tmp_path / "plugins")
     tool = FileSystemTool.from_settings(settings)
     protected = {str(path) for path in tool._protected_dirs}
     assert str((tmp_path / "plugins").resolve()) in protected
-    assert any(path.name == "cortex" and (path / "cli.py").exists() for path in tool._protected_dirs)
+    assert any(path.name == "quietpost" and (path / "cli.py").exists() for path in tool._protected_dirs)
+
+
+def test_filesystem_from_settings_without_a_plugins_dir(tmp_path: Path) -> None:
+    """With no plugins folder set, the package (shipped plugins included) stays protected."""
+    from quietpost.config.settings import Settings
+
+    tool = FileSystemTool.from_settings(Settings(allowed_root=tmp_path))
+    assert [path.name for path in tool._protected_dirs] == ["quietpost"]
 
 
 @pytest.mark.asyncio
 async def test_doc_search_never_indexes_hidden_or_outside_files(tmp_path: Path) -> None:
     """Indexing hands content to the model, so it follows the file tool's rules."""
-    from cortex.tools.builtin.doc_search import DocumentSearchTool
+    from quietpost.tools.builtin.doc_search import DocumentSearchTool
 
     (tmp_path / ".env").write_text("TOKEN=secret", encoding="utf-8")
     tool = DocumentSearchTool(_FakeSemanticMemory(), allowed_root=tmp_path)  # type: ignore[arg-type]
@@ -321,7 +424,7 @@ async def test_web_fetch_reports_http_errors_accurately() -> None:
 @pytest.mark.asyncio
 async def test_web_fetch_stops_reading_at_the_download_cap() -> None:
     """A huge response is cut at the cap while downloading, not after reading it all."""
-    from cortex.tools.builtin import web_fetch
+    from quietpost.tools.builtin import web_fetch
 
     produced = 0
 
@@ -364,7 +467,7 @@ async def test_web_fetch_rejects_non_web_urls() -> None:
 
 def test_doc_chunker_splits_crlf_documents_on_paragraphs() -> None:
     """CRLF files (Windows) are chunked by paragraph, not cut into blind windows."""
-    from cortex.tools.builtin.doc_search import _chunk_document
+    from quietpost.tools.builtin.doc_search import _chunk_document
 
     first = "Memory tiers: working, episodic, semantic, procedural."
     second = "The sandbox runs code in a separate process."
@@ -378,7 +481,7 @@ def test_doc_chunker_splits_crlf_documents_on_paragraphs() -> None:
 @pytest.mark.asyncio
 async def test_calculator_handles_functions_and_caret() -> None:
     """The calculator supports sqrt, constants, and ^ as exponent."""
-    from cortex.tools.plugins.calculator import CalculatorTool
+    from quietpost.tools.plugins.calculator import CalculatorTool
 
     tool = CalculatorTool()
     assert (await tool.execute(expression="sqrt(144) + 2^3")).output == "20"
@@ -388,7 +491,7 @@ async def test_calculator_handles_functions_and_caret() -> None:
 @pytest.mark.asyncio
 async def test_calculator_refuses_runaway_exponents() -> None:
     """9**9**9 would freeze the API process; it is refused instead."""
-    from cortex.tools.plugins.calculator import CalculatorTool
+    from quietpost.tools.plugins.calculator import CalculatorTool
 
     tool = CalculatorTool()
     for expression in ("9**9**9", "(10**9999)**9999", "factorial(10**9)"):
@@ -401,7 +504,7 @@ async def test_executor_does_not_retry_deterministic_failures() -> None:
     """A tool that returns a failure is not re-run (only raised errors are retried)."""
     from unittest.mock import MagicMock
 
-    from cortex.agent.executor import Executor
+    from quietpost.agent.executor import Executor
 
     registry = MagicMock(spec=ToolRegistry)
     registry.execute = AsyncMock(
@@ -435,7 +538,7 @@ class _FakeSemanticMemory:
 @pytest.mark.asyncio
 async def test_doc_search_with_path_indexes_that_document_first(tmp_path: Path) -> None:
     """'Search README.md for X' works even when the model skipped index_document."""
-    from cortex.tools.builtin.doc_search import DocumentSearchTool
+    from quietpost.tools.builtin.doc_search import DocumentSearchTool
 
     (tmp_path / "README.md").write_text("Memory tiers: working, episodic, semantic.")
     (tmp_path / "other.md").write_text("Unrelated notes about lunch.")
@@ -453,7 +556,7 @@ async def test_doc_search_with_path_indexes_that_document_first(tmp_path: Path) 
 @pytest.mark.asyncio
 async def test_doc_search_index_with_query_also_searches(tmp_path: Path) -> None:
     """index_document with a query returns the top matches in the same call."""
-    from cortex.tools.builtin.doc_search import DocumentSearchTool
+    from quietpost.tools.builtin.doc_search import DocumentSearchTool
 
     (tmp_path / "README.md").write_text("The sandbox runs code in a separate process.")
     tool = DocumentSearchTool(_FakeSemanticMemory(), allowed_root=tmp_path)  # type: ignore[arg-type]
@@ -468,15 +571,15 @@ async def test_doc_search_index_with_query_also_searches(tmp_path: Path) -> None
 @pytest.mark.asyncio
 async def test_doc_search_accepts_out_of_range_numbers_from_the_model(tmp_path: Path) -> None:
     """chunk_size=100 (seen live from qwen2.5:7b) is clamped, not rejected by the schema."""
-    from cortex.tools.builtin.doc_search import DocumentSearchTool
+    from quietpost.tools.builtin.doc_search import DocumentSearchTool
 
-    (tmp_path / "README.md").write_text("CORTEX uses qwen2.5:7b and nomic-embed-text.")
+    (tmp_path / "README.md").write_text("Quietpost uses qwen2.5:7b and nomic-embed-text.")
     registry = ToolRegistry()
     registry.register(DocumentSearchTool(_FakeSemanticMemory(), allowed_root=tmp_path))  # type: ignore[arg-type]
 
     result = await registry.execute(
         "doc_search",
-        query="models used by CORTEX",
+        query="models used by Quietpost",
         path="README.md",
         chunk_size=100,
         overlap=50,
@@ -489,7 +592,7 @@ async def test_doc_search_accepts_out_of_range_numbers_from_the_model(tmp_path: 
 
 def test_doc_search_clamps_chunk_arguments() -> None:
     """Out-of-range sizes are clamped; overlap never exceeds half a chunk."""
-    from cortex.tools.builtin.doc_search import _chunk_args, _int_arg
+    from quietpost.tools.builtin.doc_search import _chunk_args, _int_arg
 
     assert _chunk_args({}) == (512, 64)
     assert _chunk_args({"chunk_size": 100, "overlap": 50}) == (128, 50)
@@ -510,7 +613,7 @@ async def test_python_exec_repairs_double_escaped_newlines() -> None:
 
 def test_escape_repair_leaves_valid_code_alone() -> None:
     """A real escape inside a string literal is not touched."""
-    from cortex.tools.builtin.code_exec import _repair_escaped_newlines
+    from quietpost.tools.builtin.code_exec import _repair_escaped_newlines
 
     code = 'print("a' + "\n" + 'b")'
     assert _repair_escaped_newlines(code) == code
@@ -551,7 +654,7 @@ async def test_web_fetch_refuses_redirect_to_a_private_host() -> None:
 
 def test_filesystem_infers_a_missing_action() -> None:
     """Models often omit `action`; content means write, a folder path means list."""
-    from cortex.tools.builtin.filesystem import infer_action
+    from quietpost.tools.builtin.filesystem import infer_action
 
     assert infer_action({"path": "notes.txt", "content": "x"}) == "write_file"
     assert infer_action({"path": "."}) == "list_directory"
@@ -581,8 +684,8 @@ async def test_python_exec_repairs_escaped_quotes() -> None:
 
 def test_executor_prompt_describes_python_file_access_per_backend() -> None:
     """The model is told open() reads workspace files only when the sandbox allows it."""
-    from cortex.agent.executor import Executor
-    from cortex.agent.kernel import AgentState
+    from quietpost.agent.executor import Executor
+    from quietpost.agent.kernel import AgentState
 
     state = AgentState(session_id="s", user_input="count words in README.md")
     reads = Executor(python_reads_workspace=True).build_context(state)[0].content
@@ -649,8 +752,8 @@ def junction_layout(tmp_path: Path) -> tuple[Path, Path]:
 async def test_windows_read_through_a_junction_swapped_in_after_the_check(
     junction_layout: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from cortex.tools.builtin import filesystem as fs_module
-    from cortex.tools.workspace import ensure_not_hidden
+    from quietpost.tools.builtin import filesystem as fs_module
+    from quietpost.tools.workspace import ensure_not_hidden
 
     root, outside = junction_layout
 
@@ -672,7 +775,7 @@ async def test_windows_new_file_through_a_junction_is_removed_unwritten(
     junction_layout: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The open happens before the handle can be checked, so a file it created outside is deleted."""
-    from cortex.tools import workspace as workspace_module
+    from quietpost.tools import workspace as workspace_module
 
     root, outside = junction_layout
     make_folders = workspace_module._make_folders

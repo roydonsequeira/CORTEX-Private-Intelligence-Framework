@@ -4,13 +4,13 @@ import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from cortex.agent.kernel import AgentKernel
-from cortex.config.settings import Settings
-from cortex.memory.manager import MemoryManager
-from cortex.models.provider import ModelResponse
-from cortex.models.router import ModelRouter
-from cortex.tools.base import ToolResult
-from cortex.tools.registry import ToolRegistry
+from quietpost.agent.kernel import AgentKernel
+from quietpost.config.settings import Settings
+from quietpost.memory.manager import MemoryManager
+from quietpost.models.provider import ModelResponse
+from quietpost.models.router import ModelRouter
+from quietpost.tools.base import ToolResult
+from quietpost.tools.registry import ToolRegistry
 
 
 def model_text(content: str) -> ModelResponse:
@@ -40,6 +40,7 @@ def model_tool_call(name: str, arguments: dict[str, Any]) -> ModelResponse:
                 "tool_calls": [{"function": {"name": name, "arguments": arguments}}],
             }
         },
+        tool_calls=[{"function": {"name": name, "arguments": arguments}}],
     )
 
 
@@ -69,7 +70,7 @@ def scripted_kernel(
 
     async def complete(_capability: Any, messages: Any, *_args: Any, **_kwargs: Any) -> Any:
         system = messages[0].content if messages else ""
-        if system.startswith("You are CORTEX"):
+        if system.startswith("You are Quietpost"):
             return replies.pop(0) if replies else model_text("Done.")
         if "progress evaluator" in system:
             return model_text('{"progress": true}')
@@ -96,7 +97,7 @@ def scripted_kernel(
     memory.store_tool_pattern = AsyncMock()
 
     settings = Settings(
-        ollama_base_url="http://fake:11434", max_agent_steps=8, stream_tokens=False
+        model_server_url="http://fake:11434", max_agent_steps=8, stream_tokens=False
     )
     kernel = AgentKernel(
         router=router, tool_registry=registry, memory_manager=memory, settings=settings

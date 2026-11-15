@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from cortex.api.task_store import (
+from quietpost.api.task_store import (
     InMemoryTaskStore,
     SQLiteTaskStore,
     create_task_store,
 )
-from cortex.config.settings import Settings
+from quietpost.config.settings import Settings
 
 
 @pytest.mark.asyncio

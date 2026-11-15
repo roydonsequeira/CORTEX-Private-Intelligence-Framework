@@ -5,8 +5,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cortex.config.settings import Settings
-from cortex.tools.sandbox import (
+from quietpost.config.settings import Settings
+from quietpost.tools.sandbox import (
     ContainerSandbox,
     RestrictedSandbox,
     create_sandbox,
@@ -239,7 +239,7 @@ async def test_restricted_sandbox_blocks_module_writes_and_getattr_escape() -> N
 
 def test_trailing_assignment_is_reported_when_nothing_printed() -> None:
     """`result = 2**100 // 3` reports the value instead of 'no output'."""
-    from cortex.tools.sandbox import _run_code
+    from quietpost.tools.sandbox import _run_code
 
     assert _run_code("result = 2**100 // 3") == "result = 422550200076076467165567735125"
     assert _run_code("x = 5\nx += 2") == "x = 7"
@@ -261,7 +261,7 @@ def test_trailing_assignment_is_reported_when_nothing_printed() -> None:
 )
 def test_print_inside_functions_is_collected_in_order(code: str, expected: str) -> None:
     """print() in a function or method used to be dropped: each scope had its own collector."""
-    from cortex.tools.sandbox import _run_code
+    from quietpost.tools.sandbox import _run_code
 
     assert _run_code(code) == expected
 
@@ -275,14 +275,14 @@ def test_print_inside_functions_is_collected_in_order(code: str, expected: str) 
 )
 def test_main_guard_programs_run(code: str) -> None:
     """Generated programs end with a main guard; the sandbox is the main program."""
-    from cortex.tools.sandbox import _run_code
+    from quietpost.tools.sandbox import _run_code
 
     assert _run_code(code) == "42"
 
 
 def test_other_uses_of_dunder_name_stay_refused() -> None:
     """Only the exact main guard is rewritten; __name__ itself is still off-limits."""
-    from cortex.tools.sandbox import _run_code
+    from quietpost.tools.sandbox import _run_code
 
     with pytest.raises(SyntaxError):
         _run_code("print(__name__)")
@@ -311,14 +311,14 @@ def test_other_uses_of_dunder_name_stay_refused() -> None:
 )
 def test_augmented_assignment_to_items_and_attributes(code: str, expected: str) -> None:
     """`d[k] += 1`, `xs[i] *= 3` and `obj.n += 1` work as in Python."""
-    from cortex.tools.sandbox import _run_code
+    from quietpost.tools.sandbox import _run_code
 
     assert _run_code(code) == expected
 
 
 def test_augmented_item_assignment_evaluates_the_key_once() -> None:
     """Like Python, the container and key expressions run once, not twice."""
-    from cortex.tools.sandbox import _run_code
+    from quietpost.tools.sandbox import _run_code
 
     code = (
         "calls = []\ndef key():\n    calls.append(1)\n    return 'k'\n"
@@ -329,7 +329,7 @@ def test_augmented_item_assignment_evaluates_the_key_once() -> None:
 
 def test_augmented_assignment_keeps_private_attributes_blocked() -> None:
     """The rewrite changes no policy: underscore attributes stay refused."""
-    from cortex.tools.sandbox import _run_code
+    from quietpost.tools.sandbox import _run_code
 
     with pytest.raises(SyntaxError):
         _run_code("class C:\n    pass\nc = C()\nc._n += 1")
@@ -375,12 +375,12 @@ async def test_restricted_sandbox_reads_workspace_files(tmp_path: Any) -> None:
         ("open('missing.txt').read()", "File not found"),
         ("open('data.bin').read()", "binary file"),
         ("open('big.txt').read()", "1MB"),
-        ("open(3)", "path relative to the CORTEX workspace"),
+        ("open(3)", "path relative to the Quietpost workspace"),
     ],
 )
 def test_workspace_open_is_read_only_and_confined(tmp_path: Any, code: str, error: str) -> None:
     """Writes, traversal, hidden paths, binaries and oversized files are refused."""
-    from cortex.tools.sandbox import _run_code
+    from quietpost.tools.sandbox import _run_code
 
     root = _workspace(tmp_path)
     (root / "notes.txt").write_text("keep me", encoding="utf-8")
@@ -399,7 +399,7 @@ def test_workspace_open_is_read_only_and_confined(tmp_path: Any, code: str, erro
 
 def test_workspace_open_refuses_absolute_paths_outside(tmp_path: Any) -> None:
     """An absolute path to a real file outside the workspace is denied."""
-    from cortex.tools.sandbox import _run_code
+    from quietpost.tools.sandbox import _run_code
 
     root = _workspace(tmp_path)
     outside = tmp_path / "outside.txt"
@@ -410,7 +410,7 @@ def test_workspace_open_refuses_absolute_paths_outside(tmp_path: Any) -> None:
 
 def test_workspace_open_refuses_symlink_escape(tmp_path: Any) -> None:
     """A symlink inside the workspace that points outside it is denied."""
-    from cortex.tools.sandbox import _run_code
+    from quietpost.tools.sandbox import _run_code
 
     root = _workspace(tmp_path)
     outside = tmp_path / "outside.txt"
@@ -425,7 +425,7 @@ def test_workspace_open_refuses_symlink_escape(tmp_path: Any) -> None:
 
 def test_workspace_open_reads_like_open(tmp_path: Any) -> None:
     """Text mode translates CRLF line endings; 'rb' returns bytes; lines iterate."""
-    from cortex.tools.sandbox import _run_code
+    from quietpost.tools.sandbox import _run_code
 
     root = _workspace(tmp_path)
     (root / "data.csv").write_bytes(b"name,score\r\nada,3\r\nsam,4\r\n")
@@ -450,7 +450,7 @@ async def test_sandbox_without_workspace_has_no_open() -> None:
 
 def test_create_sandbox_gives_restricted_backend_the_workspace(tmp_path: Any) -> None:
     """Only the restricted backend reads the workspace; python_exec describes each."""
-    from cortex.tools.builtin.code_exec import CodeExecutionTool
+    from quietpost.tools.builtin.code_exec import CodeExecutionTool
 
     restricted = create_sandbox(Settings(code_sandbox="restricted", allowed_root=tmp_path))
     container = create_sandbox(Settings(code_sandbox="container", allowed_root=tmp_path))

@@ -9,12 +9,12 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from cortex.agent.kernel import AgentState
-from cortex.api.server import create_app
-from cortex.api.task_store import InMemoryTaskStore
-from cortex.memory.base import MemoryEntry, MemoryQuery
-from cortex.models.provider import Message
-from cortex.tools.base import ToolSchema
+from quietpost.agent.kernel import AgentState
+from quietpost.api.server import create_app
+from quietpost.api.task_store import InMemoryTaskStore
+from quietpost.memory.base import MemoryEntry, MemoryQuery
+from quietpost.models.provider import Message
+from quietpost.tools.base import ToolSchema
 
 
 class _FakeKernel:
@@ -46,7 +46,7 @@ class _FakeKernel:
 
 
 class _FakeProvider:
-    """Fake Ollama provider for health checks."""
+    """Fake model provider for health checks."""
 
     async def health_check(self) -> bool:
         return True
@@ -73,7 +73,7 @@ def app() -> FastAPI:
     """Create an app with mocked runtime state."""
     app = create_app()
     app.state.agent_kernel = _FakeKernel()
-    app.state.ollama_provider = _FakeProvider()
+    app.state.model_provider = _FakeProvider()
     app.state.semantic_memory = type("Semantic", (), {"_collection": object()})()
     app.state.tool_registry = _FakeToolRegistry()
     app.state.started_at = 1.0
@@ -88,16 +88,16 @@ def test_api_version_is_the_package_version(app: FastAPI) -> None:
     """The version in /docs comes from the installed package, not a copy that drifts."""
     from importlib.metadata import version
 
-    assert app.version == version("cortex-agent")
+    assert app.version == version("quietpost")
 
 
 def test_dunder_version_is_the_package_version() -> None:
-    """cortex.__version__ said 0.1.0 through every release up to 1.2.1."""
+    """quietpost.__version__ said 0.1.0 through every release up to 1.2.1."""
     from importlib.metadata import version
 
-    import cortex
+    import quietpost
 
-    assert cortex.__version__ == version("cortex-agent")
+    assert quietpost.__version__ == version("quietpost")
 
 
 @pytest.mark.asyncio
@@ -123,6 +123,7 @@ async def test_health_returns_expected_structure(app: FastAPI) -> None:
     assert response.status_code == 200
     assert set(response.json()) == {
         "status",
+        "model_server",
         "ollama",
         "chromadb",
         "uptime_seconds",
@@ -212,7 +213,7 @@ async def test_chat_returns_503_when_shutting_down(app: FastAPI) -> None:
 @pytest.mark.asyncio
 async def test_rate_limit_returns_429() -> None:
     """Rate limiter returns 429 with Retry-After when the bucket is empty."""
-    from cortex.api.middleware.rate_limit import RateLimitMiddleware
+    from quietpost.api.middleware.rate_limit import RateLimitMiddleware
 
     limited = FastAPI()
     limited.add_middleware(
@@ -238,7 +239,7 @@ async def test_rate_limit_returns_429() -> None:
 
 def _api_key_app(api_key: str = "s3cret") -> FastAPI:
     """A minimal app protected by APIKeyMiddleware with a known key."""
-    from cortex.api.middleware.auth import APIKeyMiddleware
+    from quietpost.api.middleware.auth import APIKeyMiddleware
 
     protected = FastAPI()
     protected.add_middleware(APIKeyMiddleware, api_key=api_key)
@@ -335,7 +336,7 @@ async def test_api_key_disabled_when_unset(app: FastAPI) -> None:
 
 def test_rate_limiter_evicts_idle_buckets() -> None:
     """Buckets idle past the TTL are evicted so the dict cannot grow unbounded."""
-    from cortex.api.middleware.rate_limit import _BUCKET_TTL_SECONDS, RateLimitMiddleware
+    from quietpost.api.middleware.rate_limit import _BUCKET_TTL_SECONDS, RateLimitMiddleware
 
     middleware = RateLimitMiddleware(app=None, requests_per_minute=100)
     middleware._consume("1.1.1.1", "default", 100)
@@ -398,8 +399,8 @@ async def test_direct_tool_endpoint_is_disabled_by_default(app: FastAPI) -> None
     """POST /tools/{name}/execute bypasses the agent, so it is off unless enabled."""
     from unittest.mock import AsyncMock
 
-    from cortex.config.settings import Settings
-    from cortex.tools.base import ToolResult
+    from quietpost.config.settings import Settings
+    from quietpost.tools.base import ToolResult
 
     execute = AsyncMock(
         return_value=ToolResult(tool_name="echo", success=True, output="hi", execution_time_ms=0.0)
