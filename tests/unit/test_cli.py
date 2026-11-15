@@ -47,12 +47,126 @@ def test_doctor_names_the_config_it_uses_or_every_place_it_looked(
 
     assert cli.main(["doctor"]) == 0
     out = capsys.readouterr().out
-    assert f"No quietpost.yaml found from {Path.cwd()} upward or in {user_file.parent}" in out
+    assert f"no quietpost.yaml in {Path.cwd()} or above it, or in {user_file.parent}" in out
 
     user_file.parent.mkdir(parents=True)
     user_file.write_text("api_port: 9500\n", encoding="utf-8")
     assert cli.main(["doctor"]) == 0
     assert f"[ ok ] Config: {user_file}" in capsys.readouterr().out
+
+
+def _fresh_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No config, no QUIETPOST_* settings and no memory: a first start after pipx install."""
+    from quietpost.config import get_settings
+
+    monkeypatch.delenv("QUIETPOST_CHROMA_PATH")
+    monkeypatch.delenv("QUIETPOST_DB_PATH")
+    get_settings.cache_clear()
+
+
+def test_doctor_connects_to_example_com_only_with_online(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The HTTPS check is the one connection doctor makes off this computer."""
+    fetched: list[str] = []
+    monkeypatch.setattr("httpx.get", lambda url, **kwargs: fetched.append(url))
+    monkeypatch.setattr(cli, "_port_free", lambda host, port: True)
+    route_ollama(monkeypatch, factory, FakeOllama({"qwen2.5:7b": None, "nomic-embed-text": None}).transport())
+
+    assert cli.main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert fetched == []
+    assert "[skip] HTTPS for web_fetch: not checked, because the check connects to example.com." in out
+    assert "Run `quietpost doctor --online` to include it." in out
+
+    assert cli.main(["doctor", "--online"]) == 0
+    assert fetched == ["https://example.com"]
+    assert "[ ok ] HTTPS works for web_fetch (connected to https://example.com)" in capsys.readouterr().out
+
+
+def test_serve_without_a_config_says_to_run_init_and_creates_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The defaults would put memory in the start folder, where a later init wouldn't look."""
+    _fresh_start(monkeypatch)
+    started = _no_server(monkeypatch)
+    fake = FakeOllama({"qwen2.5:7b": None, "nomic-embed-text": None})
+    route_ollama(monkeypatch, factory, fake.transport())
+
+    assert cli.main(["serve", "--port", "8019"]) == 1
+    out = capsys.readouterr().out
+    assert f"[FAIL] No config found: no quietpost.yaml in {tmp_path} or above it" in out
+    assert "Run `quietpost init` first." in out
+    assert "create an empty quietpost.yaml here." in out
+    assert started == []
+    assert fake.requests == []
+    assert list(tmp_path.iterdir()) == []
+
+    # doctor reports the same, and doesn't create the folders either.
+    assert cli.main(["doctor"]) == 1
+    out = capsys.readouterr().out
+    assert "[FAIL] No config found" in out
+    assert "[skip] Folders: not checked until there's a config" in out
+    assert not (tmp_path / ".quietpost").exists()
+    assert not (tmp_path / "workspace").exists()
+
+    # An empty quietpost.yaml keeps everything in this folder.
+    (tmp_path / "quietpost.yaml").write_text("", encoding="utf-8")
+    assert cli.main(["serve", "--port", "8019"]) == 0
+    assert "No config" not in capsys.readouterr().out
+    assert started == [8019]
+
+
+def test_serve_without_a_config_still_starts_on_memory_from_1x(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A 1.x install kept memory in .cortex/ under the start folder; it is used where it is."""
+    _fresh_start(monkeypatch)
+    (tmp_path / ".cortex").mkdir()
+    (tmp_path / ".cortex" / "cortex.db").write_bytes(b"")
+    started = _no_server(monkeypatch)
+    route_ollama(monkeypatch, factory, FakeOllama({"qwen2.5:7b": None}).transport())
+
+    assert cli.main(["serve", "--port", "8019"]) == 0
+    out = capsys.readouterr().out
+    assert "[warn] No config file (no quietpost.yaml in" in out
+    assert f"Memory: {tmp_path / '.cortex'}" in out
+    assert started == [8019]
+
+
+def test_serve_without_a_config_still_starts_when_variables_configure_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _fresh_start(monkeypatch)
+    monkeypatch.setenv("QUIETPOST_DB_PATH", str(tmp_path / "data" / "quietpost.db"))
+    started = _no_server(monkeypatch)
+    route_ollama(monkeypatch, factory, FakeOllama({"qwen2.5:7b": None}).transport())
+
+    assert cli.main(["serve", "--port", "8019"]) == 0
+    out = capsys.readouterr().out
+    assert "so the defaults and any QUIETPOST_* settings apply" in out
+    assert f"Memory: {tmp_path / 'data'}" in out
+    assert started == [8019]
+
+
+@pytest.mark.parametrize("variable", ["QUIETPOST_CONFIG", "CORTEX_CONFIG"])
+def test_a_config_variable_naming_a_missing_file_is_an_error(
+    variable: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Falling back to the defaults would hide a typo in the path."""
+    missing = tmp_path / "quiettpost.yaml"
+    monkeypatch.setenv(variable, str(missing))
+    started = _no_server(monkeypatch)
+
+    assert cli.main(["serve", "--port", "8019"]) == 1
+    assert f"[FAIL] {variable} names {missing}, which doesn't exist." in capsys.readouterr().out
+    assert started == []
+
+    assert cli.main(["doctor"]) == 1
+    assert f"[FAIL] {variable} names {missing}, which doesn't exist." in capsys.readouterr().out
 
 
 def test_serve_says_to_open_the_ui_only_when_the_browser_can_use_it(

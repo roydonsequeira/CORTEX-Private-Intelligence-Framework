@@ -30,7 +30,7 @@ api_port: 8000
 log_level: INFO
 
 # --- Observability ------------------------------------------------------------
-# Off for native runs (no collector). The Docker stack turns it on for Jaeger.
+# Off by default (no collector runs natively). The Docker stack turns it on for Jaeger.
 telemetry_enabled: false
 otel_endpoint: http://localhost:4317
 
