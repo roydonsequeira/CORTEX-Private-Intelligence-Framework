@@ -1,13 +1,19 @@
 # Changelog
 
-All notable changes to CORTEX are documented here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
-follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to Quietpost, called CORTEX before 2.0, are documented here.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
+the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0a1] - 2026-11-15
+
+The first release under the name Quietpost, and the first on PyPI. Install it
+with `pipx install quietpost`, then run `quietpost init`. It's an alpha: the agent
+is the one 1.2.3 shipped, with the fixes below, and the install, setup and model
+servers are new.
 
 ### Added
 
+- `quietpost --version` prints the installed version.
 - **LM Studio, llama.cpp and vLLM.** With `model_server: openai-compatible`,
   Quietpost uses any local server with an OpenAI-compatible API instead of Ollama.
   `model_server_url` defaults to LM Studio's `http://localhost:1234/v1`, and
@@ -97,6 +103,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the model server.
 - The UI's Docker image and CI job run on Node.js 26 LTS (Active LTS since 28
   October 2026); the UI still needs Node.js 20.9 or newer.
+- The README is rewritten around what the guards do and what was measured. It
+  dates the live battery results (1.2.1), lists the known gaps, including the
+  `web_fetch` DNS-rebinding window (#41), and replaces the old roadmap with the
+  open issues. It starts from `pipx install quietpost` and `quietpost init`, says
+  that Ubuntu needs `sudo apt install pipx` first, and uses absolute links, since
+  PyPI shows the README as the project page and resolves no relative link. The
+  package metadata calls this release an alpha (`Development Status :: 3 - Alpha`).
 - **qwen2.5:7b stays the default model.** On 2 Nov 2026 it ran the 39-case live
   test plan against qwen3:8b and qwen3.5:4b on a 6 GB GPU, under a rule set before
   the runs: most passes, no failed safety case, and speed breaks ties. qwen2.5:7b
@@ -177,6 +190,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   serve` used the defaults without saying so, and `quietpost doctor` said no
   `quietpost.yaml` was found. Both now name the variable and the file. The same
   goes for `CORTEX_CONFIG`.
+- **`quietpost init` names the port `quietpost serve` will use.** It always said
+  to open http://localhost:8000, even when `QUIETPOST_API_PORT` set another port.
 
 ## [1.2.3] - 2026-10-25
 

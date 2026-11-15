@@ -5,6 +5,7 @@
     quietpost doctor         check Python, config, the model server, models and ports
                              (--online: HTTPS too, which connects to example.com)
     quietpost reset-memory   wipe stored memory (asks for --yes)
+    quietpost --version      print the installed version
 
 Because this runs inside the interpreter Quietpost is installed in, it cannot pick
 up a different Python's `uvicorn` from PATH — the most common reason a bare
@@ -19,6 +20,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from quietpost import __version__
 
 if TYPE_CHECKING:
     from quietpost.config.settings import Settings
@@ -39,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
         if callable(reconfigure):
             reconfigure(errors="replace")
     parser = argparse.ArgumentParser(prog="quietpost", description="Quietpost local AI agent")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command")
 
     serve = sub.add_parser("serve", help="start the Quietpost API server")

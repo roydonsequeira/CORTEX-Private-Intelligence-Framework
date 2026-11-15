@@ -161,7 +161,7 @@ def run(
 
     first = "download the models above, then " if setup.missing else ""
     if has_bundled_ui():
-        say(f"\nNext: {first}run `quietpost serve`, then open http://localhost:8000")
+        say(f"\nNext: {first}run `quietpost serve`, then open http://localhost:{_serve_port()}")
     else:
         say(f"\nNext: {first}run `quietpost serve`, then start the UI with `npm run dev` in ui/")
     return 1 if setup.download_failed else 0
@@ -454,6 +454,18 @@ def _warn_if_another_config_is_read(config: Path, say: Say) -> None:
     say(f"[warn] Started from {Path.cwd()}, Quietpost reads {used} instead:")
     say("       a config in the current folder or a folder above it comes first. Start")
     say(f"       Quietpost from another folder, or set QUIETPOST_CONFIG={config}")
+
+
+def _serve_port() -> int:
+    """The port `quietpost serve`, started from the current folder, will listen on.
+
+    The config just written doesn't set one, so it comes from QUIETPOST_API_PORT,
+    or from the config Quietpost reads instead, else the default.
+    """
+    try:
+        return config_settings.Settings().api_port
+    except ValueError:  # an invalid setting, which `quietpost serve` reports itself
+        return int(config_settings.Settings.model_fields["api_port"].default)
 
 
 def _same_file(a: Path, b: Path) -> bool:
