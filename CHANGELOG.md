@@ -4,6 +4,18 @@ All notable changes to Quietpost, called CORTEX before 2.0, are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `THREAT_MODEL.md`: what Quietpost protects, against what, the code and tests
+  behind each guard in 2.0.0a1, and the known gaps.
+- A design note for the inbox features (`docs/design/inbox.md`), with what they
+  will store and the rules each part must keep, and decision records ADR-005 to
+  ADR-007: a read-only mailbox with no code that sends mail, no tools for a model
+  reading email, and full-disk encryption for stored mail. None of the inbox
+  features is built yet.
+
 ## [2.0.0a1] - 2026-11-15
 
 The first release under the name Quietpost, and the first on PyPI. Install it

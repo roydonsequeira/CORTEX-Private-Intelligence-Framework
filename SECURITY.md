@@ -39,7 +39,8 @@ accepts browser requests only from the local UI's origin, rejects unknown
 `Host` names (DNS rebinding), and keeps the direct tool-execution endpoint
 disabled. Exposing it beyond loopback without `api_key` is unsupported. See the
 **Security Model** section of the [README](README.md) for what each guardrail
-does and does not guarantee.
+does and does not guarantee, and [THREAT_MODEL.md](THREAT_MODEL.md) for the code
+and tests behind each one and the known gaps.
 
 In scope:
 
