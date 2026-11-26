@@ -1,6 +1,6 @@
 # ADR-007: Stored Mail Relies on Full-Disk Encryption
 
-Status: proposed, 26 Nov 2026.
+Status: accepted, 26 Nov 2026. Not built yet.
 
 ## Context
 
