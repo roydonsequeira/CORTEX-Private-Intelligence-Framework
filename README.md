@@ -163,7 +163,7 @@ It opens only addresses you wrote in the conversation. The host must match as wr
 
 Requests are validated with Pydantic (chat messages are capped at 8,192 characters) and rate limited per IP with a token bucket: 200 requests a minute, or 60 for chat. New chat requests are refused while the server drains on shutdown. The calculator plugin walks an expression tree instead of calling `eval`, and bounds exponents and factorials, so `9**9**9` can't stall the server.
 
-Report vulnerabilities privately, as described in [SECURITY.md](https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/blob/main/SECURITY.md).
+[THREAT_MODEL.md](https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/blob/main/THREAT_MODEL.md) lists each guard with the code and the tests that enforce it, and the known gaps. Report vulnerabilities privately, as described in [SECURITY.md](https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/blob/main/SECURITY.md).
 
 ## Memory
 
@@ -332,7 +332,8 @@ Open work is tracked in [issues](https://github.com/roydonsequeira/CORTEX-Privat
 
 ## Further reading
 
-- [Architecture decisions](https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/tree/main/docs/architecture-decisions): why not LangChain, why ChromaDB, why SSE, why LATS.
+- [Architecture decisions](https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/tree/main/docs/architecture-decisions): why not LangChain, why ChromaDB, why SSE, why LATS, and for the inbox features a read-only mailbox, no tools for a model reading email, and encryption at rest.
+- [Design note for the inbox features](https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/blob/main/docs/design/inbox.md): what they will store, how the modules fit, and the rules each part must keep. Not built yet.
 - [Live battery](https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/tree/main/evals/live_battery): the cases, how to run them on isolated data, and the results for each release.
 - [CHANGELOG.md](https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/blob/main/CHANGELOG.md): every fix, with the failure that prompted it.
 - [RELEASING.md](https://github.com/roydonsequeira/CORTEX-Private-Intelligence-Framework/blob/main/RELEASING.md): how a release is built, checked and published to PyPI with signed attestations.
